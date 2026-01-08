@@ -65,7 +65,33 @@ uv sync
 
 You'll need **three terminal windows** running simultaneously.
 
-### Terminal 1: Start Reachy Mini Daemon
+### 🚀 Quick Start (Using Helper Scripts)
+
+We provide helper scripts to make starting the system easier.
+
+1.  **Terminal 1 (Robot Daemon)**:
+    ```bash
+    ./start_daemon.sh
+    ```
+    *(Edit script to remove `--sim` for real hardware)*
+
+2.  **Terminal 2 (Bot Service)**:
+    ```bash
+    ./start_bot.sh
+    ```
+
+3.  **Terminal 3 (Agent Service)**:
+    ```bash
+    ./start_agent.sh
+    ```
+
+---
+
+### Manual Execution
+
+If you prefer to run commands manually:
+
+#### Terminal 1: Start Reachy Mini Daemon
 
 Navigate to the `bot` directory and start the robot daemon:
 
@@ -83,7 +109,7 @@ uv run -m reachy_mini.daemon.app.main --sim --no-localhost-only
 
 *Note: The `--sim` flag runs the robot in simulation mode. Remove it if using actual hardware.*
 
-### Terminal 2: Start Bot Service
+#### Terminal 2: Start Bot Service
 
 In the `bot` directory:
 
@@ -98,7 +124,7 @@ This service handles:
 - Robot movement coordination
 - Emotional expression through dance moves
 
-### Terminal 3: Start NeMo Agent Service
+#### Terminal 3: Start NeMo Agent Service
 
 In the `nat` directory:
 
@@ -108,6 +134,30 @@ uv run --env-file ../.env nat serve --config_file src/ces_tutorial/config.yml --
 ```
 
 This launches the NeMo Agent Toolkit server with intelligent model routing capabilities.
+
+---
+
+### Option: Run with Local Models (vLLM)
+
+You can run the models locally using vLLM containers instead of relying on NVIDIA Cloud APIs.
+
+1.  **Prerequisites**:
+    *   Docker and Docker Compose installed.
+    *   NVIDIA GPU with sufficient VRAM (approx 60GB for BF16 models).
+    *   Hugging Face Token (for downloading models) in `.env` as `HUGGING_FACE_HUB_TOKEN`.
+
+2.  **Start vLLM Containers**:
+    Open a new terminal window:
+    ```bash
+    ./start_local_vllm.sh
+    ```
+    This will start 3 containers on ports 8002, 8003, and 8004.
+
+3.  **Run NeMo Agent Service Locally**:
+    Use the helper script with the `--local` flag in Terminal 3:
+    ```bash
+    ./start_agent.sh --local
+    ```
 
 ## How It Works
 

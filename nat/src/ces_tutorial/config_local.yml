@@ -1,0 +1,63 @@
+general:
+  front_end:
+    _type: fastapi
+
+
+functions:
+   wikipedia_search:
+      _type: wiki_search
+      max_results: 2
+      
+   router:
+      _type: router
+      route_config:
+        - name: other
+          description: Any question that requires careful thought, outside information, image understanding, or tool calling to take actions.
+        - name: chit_chat
+          description: Any simple chit chat, small talk, or casual conversation.
+        - name: image_understanding
+          description: A question that requires the assistant to see the user eg a question about their appearance, environment, scene or surroundings. Examples what am I holding, what am I wearing, what do I look like, what is in my surroundings, what does it say on the whiteboard. Questions about attire eg what color is my shirt/hat/jacket/etc
+
+
+      llm_name: routing_llm
+
+   react_agent:
+      _type: react_agent
+      llm_name: agent_llm
+      verbose: true
+      parse_agent_response_max_retries: 3
+      tool_names: [wikipedia_search]
+
+llms:
+   # Tell NeMo Agent Toolkit which LLM to use for the agent
+   agent_llm:
+      _type: openai
+      model_name: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8
+      base_url: http://localhost:8002/v1
+      api_key: dummy
+      temperature: 0.0 
+   chitchat_llm:
+      _type: openai
+      model_name: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8
+      base_url: http://localhost:8002/v1
+      api_key: dummy
+      temperature: 0.0
+   routing_llm: 
+      _type: openai
+      model_name: microsoft/Phi-3-mini-128k-instruct
+      base_url: http://localhost:8003/v1
+      api_key: dummy
+      temperature: 0.0
+   image_llm:
+      _type: openai
+      model_name: nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-NVFP4-QAD
+      base_url: http://localhost:8004/v1
+      api_key: dummy
+      temperature: 0.0
+
+workflow:
+   _type: ces_tutorial_router_agent
+   agent: react_agent
+   router: router 
+   chitchat_llm: chitchat_llm
+   image_llm: image_llm
