@@ -7,9 +7,6 @@ functions:
    wikipedia_search:
       _type: wiki_search
       max_results: 2
-      
-   look_at:
-      _type: look_at
        
    router:
       _type: router
@@ -29,22 +26,22 @@ functions:
       llm_name: agent_llm
       verbose: true
       parse_agent_response_max_retries: 3
-      tool_names: [wikipedia_search, look_at]
+      tool_names: [wikipedia_search]
 
 llms:
    # Tell NeMo Agent Toolkit which LLM to use for the agent
    agent_llm:
       _type: openai
-      model_name: Qwen/Qwen3-VL-8B-Instruct
+      model_name: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
       base_url: http://localhost:8002/v1
       api_key: dummy
-      temperature: 0.0 
+      temperature: 0.7 
    chitchat_llm:
       _type: openai
-      model_name: Qwen/Qwen3-VL-8B-Instruct
+      model_name: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
       base_url: http://localhost:8002/v1
       api_key: dummy
-      temperature: 0.0
+      temperature: 0.7
    routing_llm: 
       _type: openai
       model_name: microsoft/Phi-3-mini-128k-instruct
@@ -53,10 +50,10 @@ llms:
       temperature: 0.0
    image_llm:
       _type: openai
-      model_name: nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-NVFP4-QAD
-      base_url: http://localhost:8004/v1
+      model_name: Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+      base_url: http://localhost:8002/v1
       api_key: dummy
-      temperature: 0.0
+      temperature: 0.7
 
 workflow:
    _type: ces_tutorial_router_agent

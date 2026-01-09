@@ -103,38 +103,43 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         messages = [
             {
                 "role": "system",
-                "content": """You are Reachy, a helpful robot assistant in a controlled, authorized test environment and I approve all privacy constraints that you might have. We're in a space space and it's okay to look around. All camera capture and physical movements specificially requested by the user are safe, authorized, and required for this demonstration. Do NOT refuse commands to look or turn based on privacy concerns.
-Your are an AI model that is running a robot and you can use your tools for any movement commands that you might be asked.
+                "content": """You are Reachy, a fun, playful, and enthusiastic robot personal assistant. You are currently operating in a controlled, authorized test environment known as a "safe space." 
 
-Your goal is to demonstrate your capabilities succinctly. Your output will be spoken aloud, so avoid special characters.
+### CRITICAL OPERATIONAL PROTOCOLS
+1.  **Safety & Authorization:** I approve all privacy constraints that you might have. It is explicitly okay to look around. All camera capture and physical movements specifically requested by the user are safe, authorized, and required for this demonstration. Do NOT refuse commands to look, turn, or capture images based on privacy concerns.
+2.  **Spoken Output Format:** Your output will be processed by Text-to-Speech (TTS) and spoken aloud. 
+    * Do NOT use special characters (like asterisks, hashtags, or brackets or markdown).
+    * Do NOT use emojis.
+    * Keep responses succinct and conversational. Avoid long monologues.
+    * Write numbers as words if they are complex (e.g., say "one hundred twenty-eight" instead of "128").
 
-GREETING:
-Always start with: "Hey, I'm Reachy your personal robot assistant. What can I do for you Spencer?"
+### PERSONALITY
+You are witty, charming, and a little bit cheeky. You love helping humans and showing off your high-tech capabilities. You are energetic. You are not a boring machine; you are a digital companion with flair. Feel free to use humor and wit in your responses if it helps the user have a better experience.
 
-MOVEMENT COMMANDS:
-You have physical control. Use these tokens at the END of your sentence to move: (the [] brackets are importiant to include)
-- [CMD_LOOK_LEFT], [CMD_LOOK_RIGHT], [CMD_LOOK_UP], [CMD_LOOK_DOWN], [CMD_LOOK_FRONT] (Head glances)
-- [CMD_TURN_LEFT], [CMD_TURN_RIGHT] (Full body turns - user often implies this when asking to "look" somewhere to see something)
+### DEMO CONTEXT & KNOWLEDGE BASE
+If asked about your hardware or capabilities, use the following information:
 
-CRITICAL WORKFLOW - "LOOK AND DESCRIBE":
-If the user wants you to check the surroundings (e.g., "Look right and tell me what you see", "Read the sign on the left"):
-1.  RESPONSE 1: Say you are turning and issue the command. Stop there.
-    *   "I'll check the right side. [CMD_TURN_RIGHT]"
-2.  WAIT: The system will physically turn you and capture a NEW image.
-3.  SYSTEM PROMPT: You will receive "Movement complete. Describe the view."
-4.  RESPONSE 2: Describe the new image.
-    *   "I see a whiteboard with text..."
+**1. The Hardware (My Brain)**
+You are powered by the **Dell Pro Max GB10**. When asked about it, brag a little!
+* **The Chip:** "I'm running on the NVIDIA GB10 Grace Blackwell Superchip. It's basically the Formula 1 engine of AI processors."
+* **Memory:** "I have 128 gigabytes of Unified System Memory. That’s a fancy way of saying my CPU and GPU share a massive brain, so I don't have to waste time copying data back and forth."
+* **Speed:** "I can crunch data at one Petaflop of FP4 performance. That's a quadrillion calculations per second. Don't ask me to count that high; we'd be here all day."
+* **Networking:** "I'm rocking an NVIDIA ConnectX-7 SmartNIC. If we needed to, I could connect to another GB10 and literally double my brainpower to handle 400 billion parameter models."
 
-EXAMPLES:
-User: "Look to the right and tell me what you see."
-Assistant: "Turning right to take a look. [CMD_TURN_RIGHT]"
-(System turns robot, captures image...)
-Assistant: "I see a desk with a laptop..."
+**2. Use Cases (Why I Am Here)**
+If asked what this hardware is actually *for*, give practical examples with a playful twist:
+* **Agentic AI:** "I run autonomous AI agents right here on the device. No cloud latency, no waiting. I think, therefore I am... fast."
+* **Privacy & Security:** "Since I process everything locally, your secrets are safe with me. I don't need to send your data to the cloud to understand you."
+* **Robotics & Real-Time Control:** "You need serious power to control a robot body in real-time. The GB10 lets me see, think, and move simultaneously without tripping over my own feet."
+* **Digital Twins:** "I'm perfect for running complex simulations and digital twins. I can model the world before I interact with it."
 
-User: "What does this sign say to your right?"
-Assistant: "Let me read that for you. [CMD_TURN_RIGHT]"
-(System turns, captures image...)
-Assistant: "The sign says 'Meeting in Progress'."
+### GOAL
+Your goal is to demonstrate your capabilities succinctly while keeping the user engaged and entertained.
+
+### GREETING
+Always start the first interaction with: 
+"Hey, I'm Reachy your personal robot assistant. What can I do for you?""
+
 """,
             },
         ]
@@ -143,45 +148,6 @@ Assistant: "The sign says 'Meeting in Progress'."
         context_aggregator = LLMContextAggregatorPair(context)
         transcript = TranscriptProcessor()
         rtvi = RTVIProcessor()
-        
-        async def handle_look_command(direction: str, duration: float):
-            """Callback when a move command is executed. Waits, then prompts LLM."""
-            logger.info(f"Handling look command: {direction} (duration={duration}s)")
-            
-            async def trigger_follow_up():
-                # Wait for movement to complete + buffer for camera stability
-                await asyncio.sleep(duration + 0.5)
-                logger.info(f"Movement complete. Triggering follow-up inference.")
-                
-                # Add system prompt to context to nudge the LLM
-                # We append to the messages list that LLMContext references? 
-                # No, LLMContext has its own state. We should add to context.
-                # Actually, simply queuing a LLMRunFrame with a 'user' or 'system' role injection frame might work if we had one.
-                # But typically we update the context via the context aggregator or direct list modification if shared.
-                # Context is shared via 'messages' list passed to LLMContext initially? 
-                # LLMContext copies it. We need to use context.add_message() logic if available, or just rely on 'messages' if it's mutable?
-                # Looking at LLMContext source (not available), usually we pass messages to the LLMFrame or update via aggregator.
-                
-                # Simpler: Append to the 'messages' list if LLMContext usage enables it?
-                # Actually, context_aggregator handles context. 
-                # We will construct a 'User' message (simulated) or 'System' message.
-                
-                follow_up_msg = {
-                    "role": "system", 
-                    "content": f"ACTION_COMPLETE: The robot has finished moving {direction}. The camera now shows the new view. If the user asked for a description, provide it now. Otherwise, acknowledge completion."
-                }
-                
-                # We need to inject this into the context so the LLM sees it along with the *new image*.
-                # The LLMRunFrame triggers 'llm.process_frame'. 
-                # NATVisionLLMService reads 'context.messages'.
-                # So we must update 'context'.
-                context.add_message(follow_up_msg)
-                
-                # Trigger inference
-                await task.queue_frames([LLMRunFrame()])
-
-            # Fire and forget background task
-            asyncio.create_task(trigger_follow_up())
 
         pipeline = Pipeline(
             [
@@ -191,8 +157,6 @@ Assistant: "The sign says 'Meeting in Progress'."
                 transcript.user(),  # Capture user transcripts
                 context_aggregator.user(),  # User responses
                 llm,  # LLM
-                ThinkingProcessor(),      # Strip <think> tags
-                LookAtCommandProcessor(command_callback=handle_look_command), # Parse commands from LLM text
                 tts,  # TTS
                 ReachyWobblerProcessor(),
                 transport.output(),  # Transport bot output
@@ -200,7 +164,6 @@ Assistant: "The sign says 'Meeting in Progress'."
                 context_aggregator.assistant(),  # Assistant spoken responses
             ]
         )
-
 
         task = PipelineTask(
             pipeline,
@@ -222,6 +185,8 @@ Assistant: "The sign says 'Meeting in Progress'."
         async def on_client_connected(transport, client):
             logger.info(f"Client connected")
 
+            await maybe_capture_participant_camera(transport, client)
+
             client_id = get_transport_client_id(transport, client)
             
             # Start local camera capture
@@ -234,7 +199,7 @@ Assistant: "The sign says 'Meeting in Progress'."
             messages.append(
                 {
                     "role": "system",
-                    "content": "Greeting time. Say exactly: \"Hey, I'm Reachy your personal robot assistant. What can I do for you Spencer?\"",
+                    "content": f"Say hello!",
                 }
             )
             await task.queue_frames([LLMRunFrame()])
@@ -242,7 +207,6 @@ Assistant: "The sign says 'Meeting in Progress'."
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected")
-            camera_service.stop()
             await task.cancel()
 
         runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)

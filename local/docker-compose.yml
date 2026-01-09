@@ -16,7 +16,7 @@ services:
     ports:
       - "8002:8000"
     # Agent: Qwen3 30B NVFP4
-    command: vllm serve Qwen/Qwen3-VL-8B-Instruct --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.3 --max-model-len 4096 --trust-remote-code --max-num-seqs 1
+    command: vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.6 --max-model-len 128000 --trust-remote-code --max-num-seqs 1
     deploy:
       resources:
         reservations:
@@ -30,7 +30,6 @@ services:
       timeout: 10s
       retries: 60
       start_period: 60s
-
   routing-llm:
     image: nvcr.io/nvidia/vllm:25.12-py3
     container_name: routing-llm
@@ -62,37 +61,4 @@ services:
       start_period: 20s
     depends_on:
       agent-llm:
-        condition: service_healthy
-
-  image-llm:
-    image: nvcr.io/nvidia/vllm:25.12-py3
-    container_name: image-llm
-    runtime: nvidia
-    ipc: host
-    ulimits:
-      memlock: -1
-      stack: 67108864
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
-    ports:
-      - "8004:8000"
-    # Image: 12B FP4 (~7GB weights). 40% alloc (bumped from 20%) to match user edit
-    command: vllm serve nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-NVFP4-QAD --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.3 --max-model-len 4096 --trust-remote-code
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [ gpu ]
-    healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://0.0.0.0:8000/health || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-    depends_on:
-      routing-llm:
         condition: service_healthy
