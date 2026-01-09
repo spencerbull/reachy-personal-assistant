@@ -37,7 +37,7 @@ import asyncio
 from nat_vision_llm import NATVisionLLMService
 from services.reachy_service import ReachyService
 from services.reachy_service import ReachyService
-from services.processor import ReachyWobblerProcessor, LookAtCommandProcessor, ThinkingProcessor
+from services.processor import ReachyWobblerProcessor
 from services.camera_service import CameraInputService
 from services.camera_service import CameraInputService
 
@@ -110,6 +110,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 2.  **Spoken Output Format:** Your output will be processed by Text-to-Speech (TTS) and spoken aloud. 
     * Do NOT use special characters (like asterisks, hashtags, or brackets or markdown).
     * Do NOT use emojis.
+    * Do not use internal monologues or things like *Turns head slowly* or *Nods head* or *Shakes head*. 
     * Keep responses succinct and conversational. Avoid long monologues.
     * Write numbers as words if they are complex (e.g., say "one hundred twenty-eight" instead of "128").
 
