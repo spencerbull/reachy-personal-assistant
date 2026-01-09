@@ -17,4 +17,4 @@ else
 fi
 
 # Run the agent using uv
-uv run --env-file ../.env nat serve --config_file "$CONFIG_FILE" --port 8001
+uv run --env-file ../.env nat serve --config_file "$CONFIG_FILE" --port 8001 

@@ -7,6 +7,9 @@ functions:
    wikipedia_search:
       _type: wiki_search
       max_results: 2
+   
+   look_at:
+      _type: look_at
       
    router:
       _type: router
@@ -26,7 +29,7 @@ functions:
       llm_name: agent_llm
       verbose: true
       parse_agent_response_max_retries: 3
-      tool_names: [wikipedia_search]
+      tool_names: [wikipedia_search, look_at]
 
 llms:
    # Tell NeMo Agent Toolkit which LLM to use for the agent

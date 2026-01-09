@@ -15,8 +15,8 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
     ports:
       - "8002:8000"
-    # Agent: 30B FP8 (~30GB weights). 40% alloc = ~51GB total.
-    command: vllm serve nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8 --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.4 --max-model-len 4096 --trust-remote-code --max-num-seqs 1
+    # Agent: Qwen3 30B NVFP4
+    command: vllm serve Qwen/Qwen3-VL-8B-Instruct --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.3 --max-model-len 4096 --trust-remote-code --max-num-seqs 1
     deploy:
       resources:
         reservations:
@@ -46,7 +46,7 @@ services:
     ports:
       - "8003:8000"
     # Router: Phi-3 (~7GB weights). 20% alloc = ~25GB total.
-    command: vllm serve microsoft/Phi-3-mini-128k-instruct --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.15 --max-model-len 4096 --trust-remote-code
+    command: vllm serve microsoft/Phi-3-mini-128k-instruct --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.1 --max-model-len 4096 --trust-remote-code
     deploy:
       resources:
         reservations:

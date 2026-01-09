@@ -99,35 +99,91 @@ class ReachyService:
             logger.debug(f"Reachy not connected - ignoring look_at({direction})")
             return
 
-        # Mapping adapted from Reachy tools
-        DELTAS = {
-            "left": (0, 0, 0, 0, 0, 40),
-            "right": (0, 0, 0, 0, 0, -40),
-            "up": (0, 0, 0, 0, -30, 0),
-            "down": (0, 0, 0, 0, 30, 0),
-            "front": (0, 0, 0, 0, 0, 0),
-        }
-        deltas = DELTAS.get(direction, DELTAS["front"])
+        # Mapping: direction -> (rx, ry, rz, tx, ty, tz, body_yaw)
+        # Head coords: x, y, z (meters), roll, pitch, yaw (degrees)
+        # Note: create_head_pose args are (x, y, z, roll, pitch, yaw)
+        # ReachyMini create_head_pose might be (roll, pitch, yaw)? 
+        # Wait, line 7: from reachy_mini.utils import create_head_pose
+        # Usage at 113: create_head_pose(*deltas, degrees=True)
+        # Current DELTAS has 6 values.
+        
+        # Let's map direction to head_yaw AND body_yaw
+        
+        # Head Yaw (last element of 6-tuple currently)
+        # Body Yaw (separate variable)
+        
+        target_head_yaw = 0
+        target_head_pitch = 0
+        target_body_yaw = 0
+        
+        # "Look" = Head dominant (Use neck)
+        if direction == "left":
+            target_head_yaw = 40
+            target_body_yaw = 0
+        elif direction == "right":
+            target_head_yaw = -40
+            target_body_yaw = 0
+            
+        # "Turn" = Body dominant (Use torso, keep head aligned or slightly helping)
+        elif direction == "turn_left":
+            target_body_yaw = 45 # Rotate body left
+            target_head_yaw = target_body_yaw # Align head with body
+        elif direction == "turn_right":
+            target_body_yaw = -45
+            target_head_yaw = target_body_yaw # Align head with body
+            
+        elif direction == "up":
+            target_head_pitch = -30
+        elif direction == "down":
+            target_head_pitch = 30
+            
+        # Assuming deltas was (0,0,0, 0, pitch, yaw)
+        deltas = (0, 0, 0, 0, target_head_pitch, target_head_yaw)
         
         try:
-            target_pose = create_head_pose(*deltas, degrees=True)
+            # Get current pose first to preserve frame origin (XYZ)
             current_head_pose = self.robot.get_current_head_pose()
+            current_x = current_head_pose[0, 3] # float
+            current_y = current_head_pose[1, 3] # float
+            current_z = current_head_pose[2, 3] # float
+            
+            # Use current XYZ but apply target rotations
+            # Note: create_head_pose args: x, y, z, roll, pitch, yaw
+            target_pose = create_head_pose(
+                current_x, 
+                current_y, 
+                current_z, 
+                0, # target roll is 0 
+                target_head_pitch, 
+                target_head_yaw, 
+                degrees=True,
+                mm=False
+            )
+            
             _, current_antennas = self.robot.get_current_joint_positions()
+
+            # Determine duration based on move type
+            # Body turns should be slower
+            duration = 1.0
+            if abs(target_body_yaw) > 10:
+                duration = 3.0
 
             goto_move = GotoQueueMove(
                 target_head_pose=target_pose,
                 start_head_pose=current_head_pose,
                 target_antennas=(0, 0),
                 start_antennas=(current_antennas[0], current_antennas[1]),
-                target_body_yaw=0, 
-                start_body_yaw=0,
-                duration=1.0
+                target_body_yaw=target_body_yaw, 
+                start_body_yaw=0, 
+                duration=duration
             )
             self.motion_manager.queue_move(goto_move)
-            self.motion_manager.set_moving_state(1.0)
-            logger.info(f"Reachy looking {direction}")
+            self.motion_manager.set_moving_state(duration)
+            logger.info(f"Reachy action {direction}: head_yaw={target_head_yaw}, body_yaw={target_body_yaw}, duration={duration}, xyz=({current_x:.2f},{current_y:.2f},{current_z:.2f})")
+            return duration
         except Exception as e:
             logger.error(f"Look at failed: {e}")
+            return 0.0
 
     def disconnect(self):
         """Disconnect and cleanup Reachy resources."""
