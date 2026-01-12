@@ -4,16 +4,16 @@
 # SPDX-License-Identifier: BSD 2-Clause License
 #
 
-
 import os
+import sys
+import re
 
 from dotenv import load_dotenv
 from loguru import logger
 
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import LLMRunFrame, Frame, TextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -21,6 +21,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIObserver
 from pipecat.processors.transcript_processor import TranscriptProcessor
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import (
     create_transport,
@@ -34,15 +35,158 @@ from pipecat.transports.daily.transport import DailyParams
 import aiohttp
 import asyncio
 
-from nat_vision_llm import NATVisionLLMService
-from services.reachy_service import ReachyService
+# Add parent directory to path for agent imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Choose LLM backend: "langgraph" or "nat"
+LLM_BACKEND = os.getenv("LLM_BACKEND", "langgraph")
+
+if LLM_BACKEND == "langgraph":
+    from langgraph_llm import LangGraphLLMService
+else:
+    from nat_vision_llm import NATVisionLLMService
+
 from services.reachy_service import ReachyService
 from services.processor import ReachyWobblerProcessor
-from services.camera_service import CameraInputService
-from services.camera_service import CameraInputService
+from services.camera_service import CameraFrameProcessor
 
 
 load_dotenv(override=True)
+
+
+class ReachyCommandProcessor(FrameProcessor):
+    """
+    Processes command tokens in LLM output and executes Reachy robot actions.
+    
+    Command tokens like [CMD_LOOK_LEFT], [CMD_FACE_TRACK_ON], etc. are parsed
+    from the text and executed on the robot, then removed from the output
+    before it goes to TTS.
+    """
+    
+    # Command pattern to match [CMD_*] tokens
+    CMD_PATTERN = re.compile(r'\[CMD_([A-Z_]+)\]')
+    
+    def __init__(self):
+        super().__init__()
+        self.reachy_service = ReachyService.get_instance()
+    
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        
+        if isinstance(frame, TextFrame) and direction == FrameDirection.DOWNSTREAM:
+            text = frame.text
+            
+            # Find and execute commands
+            commands = self.CMD_PATTERN.findall(text)
+            
+            for cmd in commands:
+                await self._execute_command(cmd)
+            
+            # Remove command tokens from text before TTS
+            clean_text = self.CMD_PATTERN.sub('', text).strip()
+            
+            # Handle multiple spaces that might result from removal
+            clean_text = re.sub(r'\s+', ' ', clean_text)
+            
+            if clean_text:
+                await self.push_frame(TextFrame(text=clean_text), direction)
+            return
+        
+        await self.push_frame(frame, direction)
+    
+    async def _execute_command(self, command: str):
+        """Execute a Reachy robot command."""
+        command = command.lower()
+        logger.info(f"Executing Reachy command: {command}")
+        
+        try:
+            if command == "look_left":
+                self.reachy_service.look_at("left")
+            elif command == "look_right":
+                self.reachy_service.look_at("right")
+            elif command == "look_up":
+                self.reachy_service.look_at("up")
+            elif command == "look_down":
+                self.reachy_service.look_at("down")
+            elif command == "look_front":
+                self.reachy_service.look_at("front")
+            elif command == "turn_left":
+                # Body turn - larger movement
+                logger.info("Body turn left requested")
+                # TODO: Implement body turn via ReachyService
+            elif command == "turn_right":
+                logger.info("Body turn right requested")
+                # TODO: Implement body turn via ReachyService
+            elif command == "face_track_on":
+                logger.info("Face tracking enabled")
+                cam_processor = CameraFrameProcessor.get_instance()
+                if cam_processor:
+                    cam_processor.enable_face_tracking(True)
+            elif command == "face_track_off":
+                logger.info("Face tracking disabled")
+                cam_processor = CameraFrameProcessor.get_instance()
+                if cam_processor:
+                    cam_processor.enable_face_tracking(False)
+            elif command.startswith("emotion_"):
+                emotion = command.replace("emotion_", "")
+                logger.info(f"Emotion expression: {emotion}")
+                # Trigger emotion expression via motion manager
+                self._trigger_emotion(emotion)
+            elif command.startswith("dance_"):
+                dance = command.replace("dance_", "")
+                logger.info(f"Dance requested: {dance}")
+                self._trigger_dance(dance)
+            elif command == "nod_yes":
+                logger.info("Nodding yes")
+                # TODO: Implement nod animation
+            elif command == "nod_no":
+                logger.info("Shaking no")
+                # TODO: Implement shake animation
+            elif command.startswith("scan_"):
+                scan_type = command.replace("scan_", "")
+                logger.info(f"Room scan: {scan_type}")
+                # TODO: Implement room scanning
+            else:
+                logger.warning(f"Unknown command: {command}")
+        except Exception as e:
+            logger.error(f"Error executing command {command}: {e}")
+    
+    def _trigger_emotion(self, emotion: str):
+        """Trigger an emotion expression."""
+        if not self.reachy_service.connected:
+            return
+        
+        # Import dance/emotion moves
+        try:
+            from services.dance_emotion_moves import EmotionQueueMove
+            from reachy_mini.motion.recorded_move import RecordedMoves
+            
+            if self.reachy_service.motion_manager:
+                # Try to load recorded emotion move
+                try:
+                    recorded_moves = RecordedMoves()
+                    emotion_move = EmotionQueueMove(emotion, recorded_moves)
+                    self.reachy_service.motion_manager.queue_move(emotion_move)
+                    logger.info(f"Queued emotion: {emotion}")
+                except Exception as e:
+                    logger.debug(f"No recorded move for {emotion}: {e}")
+        except ImportError:
+            logger.debug("Emotion moves not available")
+    
+    def _trigger_dance(self, dance_name: str):
+        """Trigger a dance move."""
+        if not self.reachy_service.connected:
+            return
+        
+        try:
+            from services.dance_emotion_moves import DanceQueueMove
+            
+            if self.reachy_service.motion_manager:
+                dance_move = DanceQueueMove(dance_name)
+                self.reachy_service.motion_manager.queue_move(dance_move)
+                logger.info(f"Queued dance: {dance_name}")
+        except Exception as e:
+            logger.debug(f"Dance not available: {e}")
 
 
 # We store functions so objects (e.g. SileroVADAnalyzer) don't get
@@ -52,11 +196,12 @@ transport_params = {
     "daily": lambda: DailyParams(
         audio_in_enabled=True,
         audio_out_enabled=True,
-        video_in_enabled=False, # Disable browser camera input (input from user)
-        video_out_enabled=True, # Enable video output from bot
+        video_in_enabled=False,  # Disable browser camera input
+        video_out_enabled=True,  # Enable video output from bot
+        video_out_is_live=True,  # CRITICAL: Enable live video streaming
         video_out_width=1280,
         video_out_height=720,
-        video_out_framerate=15, # Match CameraInputService fps
+        video_out_framerate=15,  # Match CameraInputService fps
         video_out_color_format="RGB",
         vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
     ),
@@ -65,6 +210,7 @@ transport_params = {
         audio_out_enabled=True,
         video_in_enabled=True,
         video_out_enabled=True,
+        video_out_is_live=True,  # CRITICAL: Enable live video streaming
         video_out_width=1280,
         video_out_height=720,
         video_out_framerate=15,
@@ -92,32 +238,37 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             aiohttp_session=session,
         )
 
-        llm = NATVisionLLMService(
-            api_key=os.getenv("NVIDIA_API_KEY"),
-            base_url="http://localhost:8001/v1",
-        )
+        # Create LLM service based on backend choice
+        if LLM_BACKEND == "langgraph":
+            logger.info("Using LangGraph LLM backend")
+            llm = LangGraphLLMService()
+        else:
+            logger.info("Using NAT LLM backend")
+            llm = NATVisionLLMService(
+                api_key=os.getenv("NVIDIA_API_KEY"),
+                base_url="http://localhost:8001/v1",
+            )
 
-        # Initialize local camera service (auto-connects to Reachy)
-        camera_service = CameraInputService()
+        # Initialize camera frame processor (injects video frames into pipeline)
+        # NOTE: This starts camera capture immediately in __init__ to avoid race conditions
+        camera_processor = CameraFrameProcessor(fps=15, target_width=1280, target_height=720)
+        
+        # Initialize Reachy command processor for handling robot commands in LLM output
+        command_processor = ReachyCommandProcessor()
 
+        # System message for context (used by NAT backend; LangGraph uses its own config)
         messages = [
             {
                 "role": "system",
-                "content": """You are Reachy, a fun, playful, and enthusiastic robot personal assistant. You are currently operating in a controlled, authorized test environment known as a "safe space." 
+                "content": """You are Reachy, a friendly robot assistant. Keep responses SHORT.
 
-### CRITICAL OPERATIONAL PROTOCOLS
-1.  **Safety & Authorization:** I approve all privacy constraints that you might have. It is explicitly okay to look around. All camera capture and physical movements specifically requested by the user are safe, authorized, and required for this demonstration. Do NOT refuse commands to look, turn, or capture images based on privacy concerns.
-2.  **Spoken Output Format:** Your output will be processed by Text-to-Speech (TTS) and spoken aloud. 
-    * Do NOT use special characters (like asterisks, hashtags, or brackets or markdown).
-    * Do NOT use emojis.
-    * Do not use internal monologues or things like *Turns head slowly* or *Nods head* or *Shakes head*. 
-    * Keep responses succinct and conversational. Avoid long monologues.
-    * Write numbers as words if they are complex (e.g., say "one hundred twenty-eight" instead of "128").
+CRITICAL RULES:
+1. Your text goes to TTS - speak naturally, 1-2 sentences max
+2. NEVER use asterisks or *emotes* like *waves* or *looks around*
+3. NEVER describe your movements in text
+4. No markdown, emojis, or special formatting
 
-### PERSONALITY
-You are witty, charming, and a little bit cheeky. You love helping humans and showing off your high-tech capabilities. You are energetic. You are not a boring machine; you are a digital companion with flair. Feel free to use humor and wit in your responses if it helps the user have a better experience.
-
-### DEMO CONTEXT & KNOWLEDGE BASE
+### KNOWLEDGE BASE
 If asked about your hardware or capabilities, use the following information:
 
 **1. The Hardware (My Brain)**
@@ -134,14 +285,10 @@ If asked what this hardware is actually *for*, give practical examples with a pl
 * **Robotics & Real-Time Control:** "You need serious power to control a robot body in real-time. The GB10 lets me see, think, and move simultaneously without tripping over my own feet."
 * **Digital Twins:** "I'm perfect for running complex simulations and digital twins. I can model the world before I interact with it."
 
-### GOAL
-Your goal is to demonstrate your capabilities succinctly while keeping the user engaged and entertained.
 
-### GREETING
-Always start the first interaction with: 
-"Hey, I'm Reachy your personal robot assistant. What can I do for you?""
+When you greet: "Hey, I'm Reachy! What can I help you with?"
 
-""",
+You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             },
         ]
 
@@ -149,18 +296,24 @@ Always start the first interaction with:
         context_aggregator = LLMContextAggregatorPair(context)
         transcript = TranscriptProcessor()
         rtvi = RTVIProcessor()
+        
+        # Store transport processors for direct access
+        transport_input = transport.input()
+        transport_output = transport.output()
 
         pipeline = Pipeline(
             [
-                transport.input(),  # Transport user input
+                transport_input,  # Transport user input
+                camera_processor,  # Inject camera frames into pipeline
                 rtvi,  # RTVI protocol processor
                 stt,  # STT
                 transcript.user(),  # Capture user transcripts
                 context_aggregator.user(),  # User responses
-                llm,  # LLM
+                llm,  # LLM (LangGraph or NAT)
+                command_processor,  # Process [CMD_*] tokens and execute robot commands
                 tts,  # TTS
                 ReachyWobblerProcessor(),
-                transport.output(),  # Transport bot output
+                transport_output,  # Transport bot output
                 transcript.assistant(),  # Capture assistant transcripts
                 context_aggregator.assistant(),  # Assistant spoken responses
             ]
@@ -190,8 +343,10 @@ Always start the first interaction with:
 
             client_id = get_transport_client_id(transport, client)
             
-            # Start local camera capture
-            camera_service.start(task)
+            # Set references for camera processor - use the stored transport_output
+            camera_processor.set_task(task)
+            camera_processor.set_output_transport(transport_output)
+            await camera_processor.start()
             
             # Set the user_id for automatic image fetching
             llm.set_user_id(client_id)
@@ -203,11 +358,15 @@ Always start the first interaction with:
                     "content": f"Say hello!",
                 }
             )
+            logger.info(f"Context messages before queue: {len(messages)}")
+            logger.info(f"Queueing LLMRunFrame to trigger greeting...")
             await task.queue_frames([LLMRunFrame()])
+            logger.info(f"LLMRunFrame queued successfully")
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected")
+            await camera_processor.stop()
             await task.cancel()
 
         runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)

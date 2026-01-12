@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Test Local vLLM Models
+# Usage: ./test_local_models.sh
+
+set -e
+
 # Configuration
 AGENT_PORT=8002
 AGENT_MODEL="Qwen/Qwen3-VL-8B-Instruct"

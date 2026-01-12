@@ -1,4 +1,12 @@
-version: '3.8'
+# vLLM Local Model Servers for Reachy Personal Assistant
+#
+# NOTE: The NVIDIA vLLM container version must match your driver version.
+# Check your driver with: nvidia-smi
+# - Driver 590.44+ -> use vllm:25.12-py3
+# - Driver 580.x   -> use vllm:25.04-py3 or earlier
+# - Driver 570.x   -> use vllm:25.01-py3 or earlier
+#
+# Current system: Driver 580.105.08 -> using vllm:25.04-py3
 
 services:
   agent-llm:
@@ -11,25 +19,35 @@ services:
       stack: 67108864
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
+      - CUDA_VISIBLE_DEVICES=0
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     ports:
       - "8002:8000"
-    # Agent: Qwen3 30B NVFP4
-    command: vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.6 --max-model-len 128000 --trust-remote-code --max-num-seqs 1
+    # Agent: Qwen3 8B Vision (smaller, fits in limited memory)
+    # For 30B model, ensure driver 590+ and sufficient GPU memory
+    command: >
+      vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+      --port 8000 
+      --host 0.0.0.0 
+      --gpu-memory-utilization 0.6
+      --max-model-len 64000
+      --trust-remote-code
+      --max-num-seqs 1
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [ gpu ]
+              capabilities: [gpu]
     healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://0.0.0.0:8000/health || exit 1" ]
+      test: ["CMD-SHELL", "curl -f http://0.0.0.0:8000/health || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 60
-      start_period: 60s
+      start_period: 120s
+
   routing-llm:
     image: nvcr.io/nvidia/vllm:25.12-py3
     container_name: routing-llm
@@ -40,25 +58,32 @@ services:
       stack: 67108864
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
+      - CUDA_VISIBLE_DEVICES=0
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     ports:
       - "8003:8000"
-    # Router: Phi-3 (~7GB weights). 20% alloc = ~25GB total.
-    command: vllm serve microsoft/Phi-3-mini-128k-instruct --port 8000 --host 0.0.0.0 --gpu-memory-utilization 0.1 --max-model-len 4096 --trust-remote-code
+    # Router: Small model for fast routing decisions
+    command: >
+      vllm serve microsoft/Phi-3-mini-4k-instruct
+      --port 8000 
+      --host 0.0.0.0 
+      --gpu-memory-utilization 0.15
+      --max-model-len 4096
+      --trust-remote-code
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [ gpu ]
+              capabilities: [gpu]
     healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://0.0.0.0:8000/health || exit 1" ]
+      test: ["CMD-SHELL", "curl -f http://0.0.0.0:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 60s
     depends_on:
       agent-llm:
         condition: service_healthy
