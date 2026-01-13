@@ -176,29 +176,90 @@ async def load_mcp_tools(
     return await loader.load_tools()
 
 
-def create_calendar_mcp_config(oauth_token: Optional[str] = None) -> MCPServerConfig:
+def create_calendar_mcp_config(credentials_path: Optional[str] = None, enabled: bool = True) -> MCPServerConfig:
     """
     Create configuration for Google Calendar MCP server.
     
-    Note: This requires setting up OAuth credentials.
+    Uses the @cocal/google-calendar-mcp package which provides:
+    - list-calendars: List all available calendars
+    - list-events: List events with date filtering
+    - get-event: Get details of a specific event by ID
+    - search-events: Search events by text query
+    - create-event: Create new calendar events
+    - update-event: Update existing events
+    - delete-event: Delete events
+    - respond-to-event: Respond to event invitations
+    - get-freebusy: Check availability across calendars
+    - get-current-time: Get current date and time
+    - list-colors: List available event colors
+    - manage-accounts: Add, list, or remove connected Google accounts
+    
+    Prerequisites:
+    1. Set up Google Cloud project with Calendar API enabled
+    2. Create OAuth credentials (Desktop app)
+    3. Run: npx @cocal/google-calendar-mcp auth
+    4. Complete OAuth flow in browser
+    5. Tokens saved to ~/.config/google-calendar-mcp/tokens.json
+    
+    See: https://github.com/nspady/google-calendar-mcp
     
     Args:
-        oauth_token: OAuth token for Google Calendar API
+        credentials_path: Path to OAuth credentials file (optional, uses default location)
+        enabled: Whether the server is enabled
         
     Returns:
         MCP server configuration
     """
     env = {}
-    if oauth_token:
-        env["GOOGLE_OAUTH_TOKEN"] = oauth_token
+    if credentials_path:
+        env["GOOGLE_OAUTH_CREDENTIALS"] = credentials_path
     
     return MCPServerConfig(
         name="google_calendar",
-        command=["npx", "-y", "@anthropic/mcp-google-calendar"],
+        command=["npx", "-y", "@cocal/google-calendar-mcp"],
         env=env,
-        description="Google Calendar access for scheduling and reminders",
-        enabled=bool(oauth_token),
+        description="Google Calendar access for scheduling, events, and reminders",
+        enabled=enabled,
     )
+
+
+def is_calendar_configured() -> bool:
+    """
+    Check if Google Calendar MCP credentials are configured.
+    
+    The @cocal/google-calendar-mcp package stores tokens at:
+    ~/.config/google-calendar-mcp/tokens.json
+    
+    Returns:
+        True if tokens exist (authenticated)
+    """
+    import os
+    from pathlib import Path
+    
+    home = Path.home()
+    
+    # Primary location used by @cocal/google-calendar-mcp
+    config_dir = home / ".config" / "google-calendar-mcp"
+    tokens_file = config_dir / "tokens.json"
+    
+    if tokens_file.exists():
+        logger.info(f"Google Calendar tokens found at {tokens_file}")
+        return True
+    
+    # Check environment variable for custom credentials path
+    if os.getenv("GOOGLE_OAUTH_CREDENTIALS"):
+        creds_path = Path(os.getenv("GOOGLE_OAUTH_CREDENTIALS"))
+        if creds_path.exists():
+            logger.info(f"Google Calendar credentials found at {creds_path}")
+            return True
+    
+    # Check custom token path if set
+    if os.getenv("GOOGLE_CALENDAR_MCP_TOKEN_PATH"):
+        token_path = Path(os.getenv("GOOGLE_CALENDAR_MCP_TOKEN_PATH"))
+        if token_path.exists():
+            return True
+    
+    return False
 
 
 def create_github_mcp_config(token: Optional[str] = None) -> MCPServerConfig:
@@ -290,8 +351,16 @@ def get_all_mcp_configs() -> list[MCPServerConfig]:
     # Add custom configurations from environment
     import os
     
-    if os.getenv("GOOGLE_OAUTH_TOKEN"):
-        configs.append(create_calendar_mcp_config(os.getenv("GOOGLE_OAUTH_TOKEN")))
+    # Add Google Calendar MCP if configured
+    if is_calendar_configured():
+        creds_path = os.getenv("GOOGLE_OAUTH_CREDENTIALS")
+        configs.append(create_calendar_mcp_config(credentials_path=creds_path, enabled=True))
+        logger.info("Google Calendar MCP server enabled")
+    elif os.getenv("CALENDAR_MCP_ENABLED", "").lower() == "true":
+        # Allow enabling via environment variable even if not authenticated yet
+        creds_path = os.getenv("GOOGLE_OAUTH_CREDENTIALS")
+        configs.append(create_calendar_mcp_config(credentials_path=creds_path, enabled=True))
+        logger.warning("Google Calendar MCP enabled via env var but may not be authenticated")
     
     if os.getenv("GITHUB_TOKEN"):
         configs.append(create_github_mcp_config(os.getenv("GITHUB_TOKEN")))

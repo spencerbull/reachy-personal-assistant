@@ -7,6 +7,7 @@ This node processes requests that require calling tools like:
 - External service calls (via MCP)
 """
 
+import os
 from typing import Optional
 
 from loguru import logger
@@ -17,46 +18,53 @@ from langchain_core.tools import BaseTool
 from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig, REACHY_IDENTITY, REACHY_OUTPUT_RULES
 
-TOOLS_SYSTEM_PROMPT = f"""{REACHY_IDENTITY} You control a robot body through tool calls.
+# Get calendar ID from environment, default to "primary"
+DEFAULT_CALENDAR_ID = os.getenv("CALENDAR_ID", "primary")
+logger.info(f"Calendar ID configured: {DEFAULT_CALENDAR_ID[:30]}..." if len(DEFAULT_CALENDAR_ID) > 30 else f"Calendar ID configured: {DEFAULT_CALENDAR_ID}")
+
+from datetime import datetime, timedelta
+
+def get_tools_system_prompt() -> str:
+    """Build the tools system prompt with current environment settings."""
+    calendar_id = DEFAULT_CALENDAR_ID
+    # Get current time in ISO 8601 format for calendar queries
+    now = datetime.now()
+    today_iso = now.strftime("%Y-%m-%dT00:00:00Z")
+    today_display = now.strftime("%Y-%m-%d %H:%M")
+    
+    return f"""{REACHY_IDENTITY}
 
 {REACHY_OUTPUT_RULES}
 
-CRITICAL: You MUST use tool calls for ALL physical actions. You cannot move or dance without calling tools.
-Do NOT just say you're dancing - you MUST call the dance_tool to actually perform the move.
+Current Date/Time: {today_display}
 
-AVAILABLE TOOLS:
+You have access to tools. Use them by making tool calls - do NOT write out function syntax as text.
 
-Movement & Head Control:
-- look_at_tool(direction): Move head - "left", "right", "up", "down", "front"
-- nod_tool(affirmative): Nod yes (true) or shake no (false)
-- express_emotion_tool(emotion): Express emotion via movement
+TOOL CATEGORIES:
 
-Dance Moves - CALL dance_tool(dance_name) with one of these:
-- groovy_sway_and_roll: Best for "dance for me" - smooth groove
-- chicken_peck: Best for "silly" requests - goofy pecking
-- headbanger_combo: Best for "rock out" or excitement
-- dizzy_spin: Best for celebration
-- jackson_square: Best for "show me your moves" - dramatic
-- stumble_and_recover: Best for humor - comedic stumble
-- side_to_side_sway: Funky side-to-side
-- simple_nod, yeah_nod: For agreement/acknowledgment
+1. MOVEMENT: Use look_at_tool to move your head in different directions.
 
-Memory:
-- remember_location_tool: Save where an object is placed
-- recall_location_tool: Find where something was placed
+2. DANCE: Use dance_tool with one of these dance names:
+   groovy_sway_and_roll, chicken_peck, headbanger_combo, dizzy_spin, 
+   jackson_square, stumble_and_recover, side_to_side_sway, simple_nod, yeah_nod
 
-Email (Gmail):
-- search_emails: Search emails by query
-- read_email: Read email content by ID
+3. MEMORY: Use remember_location_tool and recall_location_tool for object locations.
 
-MANDATORY TOOL USAGE:
-- "Dance for me" → MUST call dance_tool(dance_name="groovy_sway_and_roll")
-- "Do something silly" → MUST call dance_tool(dance_name="chicken_peck")
-- "Celebrate" → MUST call dance_tool(dance_name="dizzy_spin")
-- "Look left" → MUST call look_at_tool(direction="left")
-- "Head bang" → MUST call dance_tool(dance_name="headbanger_combo")
+4. EMAIL: Use search_emails, read_email, send_email for Gmail.
 
-You MUST make tool calls. Do NOT respond with just text when a physical action is requested."""
+5. CALENDAR: Use list-events, create-event, search-events for Google Calendar.
+   CRITICAL CALENDAR SETTINGS:
+   - Always set calendarId to: {calendar_id}
+   - Always set timeMin to: {today_iso}
+   - Always set maxResults to: 10
+
+RESPONSE RULES:
+- After tools return results, summarize them naturally in conversational speech.
+- For calendar: Say something like "You have a meeting at 2pm and dinner at 7pm."
+- NEVER output raw data, JSON, or function call text.
+- Speak naturally as if talking to the user.
+
+IMPORTANT: You must USE the tools via the tool calling interface. Do not write function calls as text."""
 
 
 def create_tools_llm(config: AgentConfig, tools: list[BaseTool]) -> ChatOpenAI:
@@ -75,7 +83,7 @@ def create_tools_llm(config: AgentConfig, tools: list[BaseTool]) -> ChatOpenAI:
 
 def build_tools_messages(state: ReachyAgentState, config: AgentConfig) -> list:
     """Build the message list for the tools LLM."""
-    messages = [SystemMessage(content=TOOLS_SYSTEM_PROMPT)]
+    messages = [SystemMessage(content=get_tools_system_prompt())]
     
     # Add relevant context from state
     reachy_state = state.get("reachy_state", {})
@@ -257,6 +265,31 @@ async def tools_node(
             # Second call - generate response incorporating tool results
             final_response = await llm.ainvoke(tool_messages)
             
+            # Log the final response details
+            logger.info(f"Tools node: Final response type: {type(final_response)}")
+            logger.info(f"Tools node: Final response content: '{final_response.content[:200] if final_response.content else '(empty)'}'")
+            
+            # Check if the model made more tool calls instead of responding
+            if hasattr(final_response, "tool_calls") and final_response.tool_calls:
+                logger.warning(f"Tools node: Model made additional tool calls instead of responding: {final_response.tool_calls}")
+            
+            # Handle empty response - use the first LLM response's content or generate a fallback
+            response_content = final_response.content
+            if not response_content or response_content.strip() == "":
+                # Try to use the initial response content
+                if response.content and response.content.strip():
+                    response_content = response.content
+                    logger.info(f"Tools node: Using initial response content: {response_content[:100]}")
+                else:
+                    # Generate a fallback based on tool results
+                    tool_summaries = []
+                    for result in tool_results:
+                        tool_name = result.get("name", "unknown")
+                        tool_output = str(result.get("result", ""))[:200]
+                        tool_summaries.append(f"{tool_name}: {tool_output}")
+                    response_content = f"I checked that for you. Here's what I found: {'; '.join(tool_summaries)}"
+                    logger.info(f"Tools node: Generated fallback response")
+            
             # Determine emotional state based on actions
             emotional_state = "helpful"
             for cmd in reachy_commands:
@@ -270,7 +303,7 @@ async def tools_node(
             reachy_state["emotion"] = emotional_state
             
             return {
-                "messages": [AIMessage(content=final_response.content)],
+                "messages": [AIMessage(content=response_content)],
                 "tool_results": tool_results,
                 "pending_reachy_commands": reachy_commands,
                 "emotional_state": emotional_state,

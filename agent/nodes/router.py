@@ -36,7 +36,7 @@ Analyze the user's message and determine the best route:
    - Memory: "Remember I put my keys here", "Where did I put my passport?"
    - Emotions: "Show me you're happy", "Be excited"
    - Dance: "Dance for me", "Do a dance", "Show me your moves", "Celebrate!", "Do something silly"
-   - Calendar: "What's on my calendar?", "Check my schedule"
+   - Calendar: "What's on my calendar?", "Check my schedule", "Am I free tomorrow at 3pm?", "Create an event", "What meetings do I have today?"
    - Email: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
 
 IMPORTANT: If the message contains ANY indication of needing to see something, route to "vision".
@@ -163,6 +163,11 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         "headbang", "sway", "spin around", "bust a move", "show off",
         # Calendar
         "calendar", "schedule", "appointment", "meeting",
+        "what's on my calendar", "check my calendar", "my events",
+        "upcoming events", "events today", "events tomorrow", "events this week",
+        "create event", "add event", "schedule event", "book a meeting",
+        "free time", "am i free", "am i available", "availability",
+        "when am i free", "find a time", "busy", "freebusy",
         # Email/Gmail
         "email", "gmail", "inbox", "send email", "send an email",
         "read email", "read my email", "check email", "check my email",
