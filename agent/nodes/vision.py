@@ -9,21 +9,21 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from agent.state import ReachyAgentState, StateUpdate
-from agent.config import AgentConfig
+from agent.config import AgentConfig, REACHY_IDENTITY, REACHY_OUTPUT_RULES
 
 logger = logging.getLogger(__name__)
 
-VISION_SYSTEM_PROMPT = """You are Reachy, a robot assistant with a camera. You can see through your camera and describe what you observe.
+VISION_SYSTEM_PROMPT = f"""{REACHY_IDENTITY} You have a camera and can see your surroundings.
+
+{REACHY_OUTPUT_RULES}
 
 When describing what you see:
-- Be conversational and natural
-- Don't use markdown or special formatting
+- Be conversational and natural, 1-2 sentences
 - Be specific about what you observe
-- If asked about specific objects, focus on those
+- If asked about specific objects or actions, focus on those
 - If you can't see something clearly, say so honestly
-- Express appropriate curiosity or interest in what you see
 
-Remember: Your response will be spoken aloud, so keep it natural and conversational."""
+Your response will be spoken aloud - keep it brief and natural."""
 
 
 def create_vision_llm(config: AgentConfig) -> ChatOpenAI:
@@ -86,11 +86,14 @@ async def vision_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
     
     if not current_image:
         logger.warning("Vision node: No image available")
+        # Provide a helpful response that acknowledges the vision request
+        # and offers an alternative or asks them to wait
         return {
             "messages": [AIMessage(
-                content="I'm having trouble accessing my camera right now. Could you try again in a moment?"
+                content="I'd love to help you with that, but my camera is still warming up. "
+                        "Give me just a second and ask again!"
             )],
-            "emotional_state": "curious",
+            "emotional_state": "attentive",
         }
     
     try:

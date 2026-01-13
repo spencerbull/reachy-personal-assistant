@@ -116,22 +116,51 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
     # Check for obvious patterns first (fast path)
     lower_msg = user_message.lower()
     
-    # Vision keywords
+    # Vision keywords - anything that requires seeing/analyzing visual input
     vision_keywords = [
-        "what do you see", "what am i", "look at this", "describe",
-        "what's in front", "what color", "what is this", "show me",
-        "holding", "wearing", "surroundings", "environment", "scene"
+        # Direct vision requests
+        "what do you see", "what can you see", "what am i", "look at this",
+        "describe what", "describe the", "describe my", "describe this",
+        "what's in front", "what is in front",
+        # Appearance questions
+        "what color", "what colour", "how many", "count the", "count my",
+        # Object/person identification
+        "what is this", "what is that", "what are these", "what are those",
+        "who is", "who am i", "who's there",
+        # Actions the user is performing
+        "holding", "wearing", "doing", "showing you",
+        # Environment description
+        "surroundings", "environment", "scene", "room", "around you",
+        # Hand/body related vision
+        "fingers", "hand", "hands", "face", "shirt", "clothes",
+        # General visual queries
+        "can you see", "do you see", "see my", "see this", "see the",
+        "read this", "read the", "read my",
     ]
     if any(kw in lower_msg for kw in vision_keywords):
         logger.info(f"Router: Fast path -> vision (keyword match)")
         return {"route": "vision"}
     
-    # Tool keywords
+    # Tool keywords - physical actions, memory, and external services
     tool_keywords = [
+        # Head movement
         "look left", "look right", "look up", "look down", "look at me",
-        "turn", "remember", "where did i", "where is my", "where are my",
-        "calendar", "schedule", "dance", "happy", "sad", "excited",
-        "face track", "follow me", "track my face"
+        "look over", "look toward", "look towards",
+        # Body movement
+        "turn left", "turn right", "turn around", "spin",
+        # Memory operations
+        "remember", "don't forget", "memorize",
+        "where did i", "where is my", "where are my", "where's my",
+        "find my", "locate my",
+        # Face tracking
+        "face track", "follow me", "track my face", "watch me",
+        "maintain eye contact", "eye contact",
+        # Emotions and expressions
+        "show me you're", "express", "be happy", "be sad", "be excited",
+        "dance", "celebrate", "wave", "nod", "shake your head",
+        # External services
+        "calendar", "schedule", "appointment", "meeting",
+        "email", "message", "reminder",
     ]
     if any(kw in lower_msg for kw in tool_keywords):
         logger.info(f"Router: Fast path -> tools (keyword match)")

@@ -306,14 +306,13 @@ class LangGraphLLMService(LLMService):
             
             logger.info(f"Processing message: {user_message[:100]}...")
             
-            # Prepare image if available
+            # Always attach the latest camera image for each request
+            # This ensures vision requests always have the current view
             image_data = None
-            logger.debug(f"Image state: last_image={self._last_image is not None}, turn_has_image={self._current_turn_has_image}")
-            if self._last_image and not self._current_turn_has_image:
+            if self._last_image:
                 image_data = self._encode_image_to_base64(self._last_image)
-                self._current_turn_has_image = True
                 logger.info(f"Attached image to request (data length: {len(image_data) if image_data else 0})")
-            elif not self._last_image:
+            else:
                 logger.warning("No image available from camera")
             
             # Build input state
