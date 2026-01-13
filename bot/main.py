@@ -350,6 +350,11 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             
             # Set the user_id for automatic image fetching
             llm.set_user_id(client_id)
+            
+            # Initialize MCP tools (Gmail, etc.) if configured
+            if LLM_BACKEND == "langgraph":
+                logger.info("Initializing MCP tools...")
+                await llm.initialize_mcp()
 
             # Kick off the conversation.
             messages.append(
@@ -367,6 +372,12 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected")
             await camera_processor.stop()
+            
+            # Close MCP connections if using LangGraph
+            if LLM_BACKEND == "langgraph" and hasattr(llm, '_mcp_loader') and llm._mcp_loader:
+                logger.info("Closing MCP connections...")
+                await llm._mcp_loader.close()
+            
             await task.cancel()
 
         runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)

@@ -38,8 +38,9 @@ from pipecat.services.llm_service import LLMService
 # Add parent directory to path for agent imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent.graph import create_graph
+from agent.graph import create_graph, create_graph_with_mcp
 from agent.config import AgentConfig
+from agent.tools.mcp_loader import get_all_mcp_configs, MCPToolLoader, is_gmail_configured
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
@@ -61,12 +62,20 @@ class LangGraphLLMService(LLMService):
         config: Optional[AgentConfig] = None,
         max_image_dimension: int = 512,
         image_quality: int = 60,
+        enable_mcp: bool = True,
+        mcp_tools: Optional[list] = None,
         **kwargs
     ):
         super().__init__(**kwargs)
         
         self._config = config or AgentConfig.from_env()
-        self._graph = create_graph(config=self._config)
+        self._enable_mcp = enable_mcp
+        self._mcp_tools = mcp_tools or []
+        self._mcp_loader = None
+        self._mcp_initialized = False
+        
+        # Create initial graph (MCP tools loaded in initialize_mcp())
+        self._graph = create_graph(config=self._config, additional_tools=self._mcp_tools)
         
         # Image processing settings
         self._max_image_dimension = max_image_dimension
@@ -79,7 +88,52 @@ class LangGraphLLMService(LLMService):
         self._current_turn_has_image: bool = False
         self._pending_image_future: Optional[asyncio.Future] = None
         
+        # Log MCP status
+        if is_gmail_configured():
+            logger.info("Gmail MCP is configured - tools will be loaded on first use")
+        else:
+            logger.info("Gmail MCP not configured (run: npx @gongrzhe/server-gmail-autoauth-mcp auth)")
+        
         logger.info(f"LangGraphLLMService initialized with {len(self._graph.nodes)} nodes")
+    
+    async def initialize_mcp(self):
+        """Load MCP tools asynchronously. Call this before first use."""
+        if self._mcp_initialized or not self._enable_mcp:
+            return
+        
+        try:
+            # Get all configured MCP servers
+            mcp_configs = get_all_mcp_configs()
+            enabled_configs = [c for c in mcp_configs if c.enabled]
+            
+            if not enabled_configs:
+                logger.info("No MCP servers enabled")
+                self._mcp_initialized = True
+                return
+            
+            logger.info(f"Loading MCP tools from {len(enabled_configs)} servers...")
+            
+            # Load tools from MCP servers
+            loader = MCPToolLoader(mcp_configs)
+            mcp_tools = await loader.load_tools()
+            
+            if mcp_tools:
+                logger.info(f"Loaded {len(mcp_tools)} MCP tools:")
+                for tool in mcp_tools:
+                    logger.info(f"  - {tool.name}")
+                
+                # Recreate graph with MCP tools
+                all_tools = self._mcp_tools + mcp_tools
+                self._graph = create_graph(config=self._config, additional_tools=all_tools)
+                self._mcp_loader = loader
+            else:
+                logger.info("No MCP tools loaded")
+            
+            self._mcp_initialized = True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize MCP: {e}")
+            self._mcp_initialized = True  # Don't retry on failure
 
     def set_user_id(self, user_id: str):
         """Set the user ID for image requests and thread identification."""

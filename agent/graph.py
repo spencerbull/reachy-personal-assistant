@@ -131,6 +131,41 @@ def create_graph_with_mcp(
     return create_graph(config=config, additional_tools=additional_tools)
 
 
+async def create_graph_with_mcp_async(
+    config: Optional[AgentConfig] = None,
+) -> CompiledStateGraph:
+    """
+    Create the LangGraph with MCP server tools loaded asynchronously.
+    
+    This function loads all configured MCP servers (including Gmail)
+    and creates the graph with those tools available.
+    
+    Args:
+        config: Agent configuration
+        
+    Returns:
+        Compiled StateGraph with MCP tools
+    """
+    from agent.tools.mcp_loader import get_all_mcp_configs, MCPToolLoader
+    
+    config = config or AgentConfig.from_env()
+    
+    # Load MCP tools from all configured servers
+    mcp_configs = get_all_mcp_configs()
+    loader = MCPToolLoader(mcp_configs)
+    
+    try:
+        mcp_tools = await loader.load_tools()
+        logger.info(f"Loaded {len(mcp_tools)} MCP tools")
+        for tool in mcp_tools:
+            logger.info(f"  - {tool.name}")
+    except Exception as e:
+        logger.error(f"Failed to load MCP tools: {e}")
+        mcp_tools = []
+    
+    return create_graph(config=config, additional_tools=mcp_tools)
+
+
 # Create a default graph instance for simple usage
 # This will be used when the module is imported directly or by langgraph CLI
 # Note: No checkpointer for CLI usage - the platform handles persistence
@@ -200,4 +235,4 @@ graph TD
 
 
 # Export for langgraph.json configuration
-__all__ = ["graph", "create_graph", "create_graph_with_mcp", "invoke_agent"]
+__all__ = ["graph", "create_graph", "create_graph_with_mcp", "create_graph_with_mcp_async", "invoke_agent"]

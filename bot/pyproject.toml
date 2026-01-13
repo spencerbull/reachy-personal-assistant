@@ -18,6 +18,8 @@ dependencies = [
     "langchain-openai>=0.3.0",
     "langchain-core>=0.3.0",
     "langgraph-checkpoint>=2.0.0",
+    # MCP integration
+    "langchain-mcp-adapters>=0.1.0",
 ]
 
 [project.optional-dependencies]

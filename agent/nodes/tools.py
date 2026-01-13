@@ -24,18 +24,31 @@ TOOLS_SYSTEM_PROMPT = f"""{REACHY_IDENTITY} You have physical capabilities and t
 {REACHY_OUTPUT_RULES}
 
 AVAILABLE TOOLS:
+
+Movement:
 - look_at_tool: Move head to look left, right, up, down, or front
 - turn_body_tool: Rotate body left or right
 - enable_face_tracking_tool: Track user's face for eye contact
+- express_emotion_tool: Show emotions through movement
+
+Memory:
 - remember_location_tool: Save where an object is placed
 - recall_location_tool: Find where something was placed
-- express_emotion_tool: Show emotions through movement
+
+Email (Gmail):
+- search_emails: Search emails by query (from, subject, date, etc.)
+- read_email: Read email content by ID
+- send_email: Send new email with subject, body, recipients
+- list_labels: List all Gmail labels
 
 When the user asks you to do something:
 1. Call the appropriate tool
 2. Give a brief, natural confirmation
 
-Example: User says "Look left" -> Call look_at_tool, then say "Looking left now." """
+Examples:
+- "Look left" -> Call look_at_tool, say "Looking left now."
+- "Check my email" -> Call search_emails, summarize what you find
+- "Send an email to John" -> Ask for details, then call send_email"""
 
 
 def create_tools_llm(config: AgentConfig, tools: list[BaseTool]) -> ChatOpenAI:

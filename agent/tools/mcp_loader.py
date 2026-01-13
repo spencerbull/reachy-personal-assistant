@@ -51,6 +51,7 @@ class MCPToolLoader:
     Loads and manages tools from MCP servers.
     
     Uses langchain-mcp-adapters to convert MCP tools to LangChain format.
+    The client connection is kept alive for the lifetime of this loader.
     """
     
     def __init__(self, server_configs: Optional[list[MCPServerConfig]] = None):
@@ -61,7 +62,7 @@ class MCPToolLoader:
             server_configs: List of MCP server configurations
         """
         self._configs = server_configs or DEFAULT_MCP_SERVERS
-        self._clients = {}
+        self._client = None
         self._tools = []
         self._loaded = False
     
@@ -76,6 +77,8 @@ class MCPToolLoader:
     async def load_tools(self) -> list:
         """
         Load tools from all configured MCP servers.
+        
+        The client connection is kept alive - call close() when done.
         
         Returns:
             List of LangChain-compatible tools
@@ -110,33 +113,51 @@ class MCPToolLoader:
         
         try:
             # Configure servers for MultiServerMCPClient
+            # New API in langchain-mcp-adapters 0.2+ requires 'transport' key
             server_params = {}
             for config in enabled_servers:
-                server_params[config.name] = {
+                server_config = {
+                    "transport": "stdio",  # Required in new API
                     "command": config.command[0],
                     "args": config.command[1:] if len(config.command) > 1 else [],
-                    "env": config.env,
                 }
+                if config.env:
+                    server_config["env"] = config.env
+                server_params[config.name] = server_config
             
-            # Create client and get tools
-            async with MultiServerMCPClient(server_params) as client:
-                self._tools = client.get_tools()
-                logger.info(f"Loaded {len(self._tools)} tools from MCP servers")
-                
-                for tool in self._tools:
-                    logger.debug(f"  - {tool.name}: {tool.description[:50]}...")
+            logger.info(f"MCP server configs: {list(server_params.keys())}")
+            
+            # Create client and get tools (new API - no context manager)
+            self._client = MultiServerMCPClient(server_params)
+            self._tools = await self._client.get_tools()
+            logger.info(f"Loaded {len(self._tools)} tools from MCP servers")
+            
+            for tool in self._tools:
+                desc = tool.description[:50] if tool.description else "No description"
+                logger.info(f"  - {tool.name}: {desc}...")
             
             self._loaded = True
             
         except Exception as e:
             logger.error(f"Failed to load MCP tools: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             self._tools = []
+            self._client = None
         
         return self._tools
     
     async def close(self):
         """Clean up MCP client connections."""
-        self._clients.clear()
+        if self._client:
+            try:
+                # New API doesn't require explicit close
+                if hasattr(self._client, 'close'):
+                    await self._client.close()
+            except Exception as e:
+                logger.warning(f"Error closing MCP client: {e}")
+            self._client = None
+        self._tools = []
         self._loaded = False
 
 
@@ -204,6 +225,61 @@ def create_github_mcp_config(token: Optional[str] = None) -> MCPServerConfig:
     )
 
 
+def create_gmail_mcp_config(enabled: bool = True) -> MCPServerConfig:
+    """
+    Create configuration for Gmail MCP server.
+    
+    Uses the @gongrzhe/server-gmail-autoauth-mcp package which provides:
+    - send_email: Send emails with attachments
+    - read_email: Read email content by ID
+    - search_emails: Search using Gmail query syntax
+    - list_labels: List all Gmail labels
+    - create_label, update_label, delete_label: Manage labels
+    
+    Prerequisites:
+    1. Set up Google Cloud project with Gmail API enabled
+    2. Create OAuth credentials (Desktop app)
+    3. Save credentials to ~/.gmail-mcp/gcp-oauth.keys.json
+    4. Run: npx @gongrzhe/server-gmail-autoauth-mcp auth
+    
+    Returns:
+        MCP server configuration
+    """
+    return MCPServerConfig(
+        name="gmail",
+        command=["npx", "-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+        env={},  # Uses credentials from ~/.gmail-mcp/
+        description="Gmail access for reading, sending, searching emails and managing labels",
+        enabled=enabled,
+    )
+
+
+def is_gmail_configured() -> bool:
+    """
+    Check if Gmail MCP credentials are configured.
+    
+    Returns:
+        True if credentials exist in ~/.gmail-mcp/
+    """
+    import os
+    from pathlib import Path
+    
+    gmail_dir = Path.home() / ".gmail-mcp"
+    credentials_file = gmail_dir / "credentials.json"
+    oauth_keys_file = gmail_dir / "gcp-oauth.keys.json"
+    
+    # Check if authenticated (credentials.json exists)
+    if credentials_file.exists():
+        return True
+    
+    # Check if OAuth keys exist (can authenticate)
+    if oauth_keys_file.exists():
+        logger.info("Gmail OAuth keys found but not authenticated. Run: npx @gongrzhe/server-gmail-autoauth-mcp auth")
+        return False
+    
+    return False
+
+
 # Directory for custom MCP servers
 MCP_SERVERS_DIR = "mcp_servers"
 
@@ -220,5 +296,14 @@ def get_all_mcp_configs() -> list[MCPServerConfig]:
     
     if os.getenv("GITHUB_TOKEN"):
         configs.append(create_github_mcp_config(os.getenv("GITHUB_TOKEN")))
+    
+    # Add Gmail MCP if configured
+    if is_gmail_configured():
+        configs.append(create_gmail_mcp_config(enabled=True))
+        logger.info("Gmail MCP server enabled")
+    elif os.getenv("GMAIL_MCP_ENABLED", "").lower() == "true":
+        # Allow enabling via environment variable even if not authenticated yet
+        configs.append(create_gmail_mcp_config(enabled=True))
+        logger.warning("Gmail MCP enabled via env var but may not be authenticated")
     
     return configs

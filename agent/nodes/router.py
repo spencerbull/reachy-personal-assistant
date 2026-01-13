@@ -32,15 +32,16 @@ Analyze the user's message and determine the best route:
 2. "vision" - Questions requiring the robot to see/analyze the camera view
    Examples: "What do you see?", "What am I holding?", "Describe my surroundings", "What color is my shirt?"
 
-3. "tools" - Requests requiring actions or memory operations
+3. "tools" - Requests requiring actions, memory operations, or external services
    Examples: 
    - Movement: "Look left", "Turn around", "Look at me"
    - Memory: "Remember I put my keys here", "Where did I put my passport?"
    - Emotions: "Show me you're happy", "Dance for me"
-   - External: "What's on my calendar?", "Check my schedule"
+   - Calendar: "What's on my calendar?", "Check my schedule"
+   - Email: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
 
 IMPORTANT: If the message contains ANY indication of needing to see something, route to "vision".
-If the message asks the robot to DO something physical or remember something, route to "tools".
+If the message asks the robot to DO something physical, remember something, or access external services (email, calendar), route to "tools".
 
 Respond with ONLY a JSON object in this exact format:
 {"route": "conversation" | "vision" | "tools", "reason": "brief explanation"}"""
@@ -158,9 +159,17 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         # Emotions and expressions
         "show me you're", "express", "be happy", "be sad", "be excited",
         "dance", "celebrate", "wave", "nod", "shake your head",
-        # External services
+        # Calendar
         "calendar", "schedule", "appointment", "meeting",
-        "email", "message", "reminder",
+        # Email/Gmail
+        "email", "gmail", "inbox", "send email", "send an email",
+        "read email", "read my email", "check email", "check my email",
+        "unread email", "new email", "latest email", "recent email",
+        "mail", "mailbox", "message from", "email from",
+        "reply to", "forward email", "compose email", "draft email",
+        "search email", "find email",
+        # General reminders
+        "reminder",
     ]
     if any(kw in lower_msg for kw in tool_keywords):
         logger.info(f"Router: Fast path -> tools (keyword match)")

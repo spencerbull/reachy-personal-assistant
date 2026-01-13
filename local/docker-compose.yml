@@ -24,7 +24,7 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
     ports:
       - "8002:8000"
-    # Agent: Qwen3 8B Vision (smaller, fits in limited memory)
+    # Agent: Qwen3 30B Vision with tool calling support
     # For 30B model, ensure driver 590+ and sufficient GPU memory
     command: >
       vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
@@ -34,6 +34,8 @@ services:
       --max-model-len 64000
       --trust-remote-code
       --max-num-seqs 1
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
     deploy:
       resources:
         reservations:
