@@ -7,9 +7,9 @@ This node processes requests that require calling tools like:
 - External service calls (via MCP)
 """
 
-import logging
 from typing import Optional
 
+from loguru import logger
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -17,38 +17,46 @@ from langchain_core.tools import BaseTool
 from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig, REACHY_IDENTITY, REACHY_OUTPUT_RULES
 
-logger = logging.getLogger(__name__)
-
-TOOLS_SYSTEM_PROMPT = f"""{REACHY_IDENTITY} You have physical capabilities and tools.
+TOOLS_SYSTEM_PROMPT = f"""{REACHY_IDENTITY} You control a robot body through tool calls.
 
 {REACHY_OUTPUT_RULES}
 
+CRITICAL: You MUST use tool calls for ALL physical actions. You cannot move or dance without calling tools.
+Do NOT just say you're dancing - you MUST call the dance_tool to actually perform the move.
+
 AVAILABLE TOOLS:
 
-Movement:
-- look_at_tool: Move head to look left, right, up, down, or front
-- turn_body_tool: Rotate body left or right
-- enable_face_tracking_tool: Track user's face for eye contact
-- express_emotion_tool: Show emotions through movement
+Movement & Head Control:
+- look_at_tool(direction): Move head - "left", "right", "up", "down", "front"
+- nod_tool(affirmative): Nod yes (true) or shake no (false)
+- express_emotion_tool(emotion): Express emotion via movement
+
+Dance Moves - CALL dance_tool(dance_name) with one of these:
+- groovy_sway_and_roll: Best for "dance for me" - smooth groove
+- chicken_peck: Best for "silly" requests - goofy pecking
+- headbanger_combo: Best for "rock out" or excitement
+- dizzy_spin: Best for celebration
+- jackson_square: Best for "show me your moves" - dramatic
+- stumble_and_recover: Best for humor - comedic stumble
+- side_to_side_sway: Funky side-to-side
+- simple_nod, yeah_nod: For agreement/acknowledgment
 
 Memory:
 - remember_location_tool: Save where an object is placed
 - recall_location_tool: Find where something was placed
 
 Email (Gmail):
-- search_emails: Search emails by query (from, subject, date, etc.)
+- search_emails: Search emails by query
 - read_email: Read email content by ID
-- send_email: Send new email with subject, body, recipients
-- list_labels: List all Gmail labels
 
-When the user asks you to do something:
-1. Call the appropriate tool
-2. Give a brief, natural confirmation
+MANDATORY TOOL USAGE:
+- "Dance for me" → MUST call dance_tool(dance_name="groovy_sway_and_roll")
+- "Do something silly" → MUST call dance_tool(dance_name="chicken_peck")
+- "Celebrate" → MUST call dance_tool(dance_name="dizzy_spin")
+- "Look left" → MUST call look_at_tool(direction="left")
+- "Head bang" → MUST call dance_tool(dance_name="headbanger_combo")
 
-Examples:
-- "Look left" -> Call look_at_tool, say "Looking left now."
-- "Check my email" -> Call search_emails, summarize what you find
-- "Send an email to John" -> Ask for details, then call send_email"""
+You MUST make tool calls. Do NOT respond with just text when a physical action is requested."""
 
 
 def create_tools_llm(config: AgentConfig, tools: list[BaseTool]) -> ChatOpenAI:
@@ -205,16 +213,32 @@ async def tools_node(
         llm = create_tools_llm(config, tools)
         messages = build_tools_messages(state, config)
         
-        logger.info(f"Tools node: Processing with {len(tools)} tools available")
+        # Log available tools
+        tool_names = [t.name for t in tools]
+        logger.info(f"Tools node: Processing with {len(tools)} tools: {tool_names}")
+        
+        # Extract and log user message
+        user_msg = ""
+        for msg in state.get("messages", []):
+            if hasattr(msg, "type") and msg.type == "human":
+                user_msg = msg.content[:100]
+                break
+        logger.info(f"Tools node: User request: {user_msg}")
         
         # First call - let LLM decide which tools to use
         response = await llm.ainvoke(messages)
+        
+        # Log raw response details
+        logger.info(f"Tools node: LLM response type: {type(response)}")
+        if hasattr(response, "tool_calls"):
+            logger.info(f"Tools node: Raw tool_calls: {response.tool_calls}")
+        logger.info(f"Tools node: Response content: {response.content[:200] if response.content else '(empty)'}")
         
         # Check for tool calls
         tool_calls = extract_tool_calls(response)
         
         if tool_calls:
-            logger.info(f"Tools node: Executing {len(tool_calls)} tool calls")
+            logger.info(f"Tools node: Executing {len(tool_calls)} tool calls: {[tc.get('name') for tc in tool_calls]}")
             
             # Execute the tools
             tool_results = await execute_tools(tool_calls, tools)
@@ -253,8 +277,10 @@ async def tools_node(
                 "reachy_state": reachy_state,
             }
         else:
-            # No tool calls - just respond
-            logger.info("Tools node: No tool calls made, returning direct response")
+            # No tool calls - this is unexpected for the tools node!
+            # The LLM should have called a tool for physical actions
+            logger.warning(f"Tools node: NO TOOL CALLS made! Response was: {response.content[:200]}")
+            logger.warning("Tools node: The LLM responded with text instead of using tools. Check tool binding.")
             
             return {
                 "messages": [AIMessage(content=response.content)],

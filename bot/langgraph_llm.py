@@ -398,8 +398,23 @@ class LangGraphLLMService(LLMService):
             if "pending_reachy_commands" in result:
                 pending_commands = result["pending_reachy_commands"]
             
+            # Also check tool_results for command tokens (backup extraction)
+            if "tool_results" in result:
+                for tool_result in result["tool_results"]:
+                    tool_output = str(tool_result.get("result", ""))
+                    # Extract any command tokens from tool output
+                    import re
+                    cmd_matches = re.findall(r'\[CMD_[A-Z_]+\]', tool_output)
+                    for cmd in cmd_matches:
+                        if cmd not in response_text:
+                            # Append command tokens to response so ReachyCommandProcessor can find them
+                            response_text = f"{response_text} {cmd}"
+                            logger.info(f"Appended command token to response: {cmd}")
+            
             logger.info(f"Agent response: {response_text[:100]}...")
             logger.info(f"Full response length: {len(response_text)} chars")
+            if pending_commands:
+                logger.info(f"Pending Reachy commands: {pending_commands}")
             
             # Send response through pipeline
             # Use LLMTextFrame (which extends TextFrame) - same as OpenAI LLM service

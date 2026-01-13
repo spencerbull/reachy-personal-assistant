@@ -5,10 +5,10 @@ This module defines the StateGraph that orchestrates the agent's behavior,
 including routing, conversation, vision understanding, and tool execution.
 """
 
-import logging
 from typing import Callable, Optional
 from functools import partial
 
+from loguru import logger
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
@@ -21,8 +21,6 @@ from agent.nodes.vision import vision_node
 from agent.nodes.tools import tools_node
 from agent.tools.reachy_tools import get_all_reachy_tools
 from agent.tools.memory_tools import get_all_memory_tools
-
-logger = logging.getLogger(__name__)
 
 
 def create_graph(

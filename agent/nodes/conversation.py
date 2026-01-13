@@ -4,14 +4,12 @@ Conversation node for handling chitchat and general responses.
 This node handles casual conversation without requiring tools or vision.
 """
 
-import logging
+from loguru import logger
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage
 
 from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig
-
-logger = logging.getLogger(__name__)
 
 
 def create_conversation_llm(config: AgentConfig) -> ChatOpenAI:

@@ -8,16 +8,14 @@ Determines which path the conversation should take:
 """
 
 import json
-import logging
 from typing import Literal
 
+from loguru import logger
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig
-
-logger = logging.getLogger(__name__)
 
 # Route types
 RouteType = Literal["conversation", "vision", "tools"]
@@ -36,7 +34,8 @@ Analyze the user's message and determine the best route:
    Examples: 
    - Movement: "Look left", "Turn around", "Look at me"
    - Memory: "Remember I put my keys here", "Where did I put my passport?"
-   - Emotions: "Show me you're happy", "Dance for me"
+   - Emotions: "Show me you're happy", "Be excited"
+   - Dance: "Dance for me", "Do a dance", "Show me your moves", "Celebrate!", "Do something silly"
    - Calendar: "What's on my calendar?", "Check my schedule"
    - Email: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
 
@@ -158,7 +157,10 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         "maintain eye contact", "eye contact",
         # Emotions and expressions
         "show me you're", "express", "be happy", "be sad", "be excited",
-        "dance", "celebrate", "wave", "nod", "shake your head",
+        # Dance and movement requests
+        "dance", "dancing", "celebrate", "wave", "nod", "shake your head",
+        "show me a move", "do a move", "do a dance", "groove", "boogie",
+        "headbang", "sway", "spin around", "bust a move", "show off",
         # Calendar
         "calendar", "schedule", "appointment", "meeting",
         # Email/Gmail

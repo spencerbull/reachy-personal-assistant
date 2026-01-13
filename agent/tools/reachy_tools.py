@@ -6,12 +6,10 @@ They return command tokens that are parsed by the Pipecat pipeline to execute
 actual robot movements.
 """
 
-import logging
 from typing import Literal, Optional
 
+from loguru import logger
 from langchain_core.tools import tool
-
-logger = logging.getLogger(__name__)
 
 # Valid directions for head movement
 HeadDirection = Literal["left", "right", "up", "down", "front"]
@@ -21,6 +19,59 @@ BodyDirection = Literal["left", "right"]
 
 # Valid emotions
 EmotionType = Literal["happy", "sad", "excited", "curious", "thinking", "neutral", "attentive", "playful"]
+
+# Valid dance moves from reachy_mini_dances_library
+# See: https://github.com/pollen-robotics/reachy_mini_dances_library
+DanceType = Literal[
+    # Simple nods and tilts
+    "simple_nod",           # Classic simple nod
+    "yeah_nod",             # Enthusiastic yeah nod
+    "uh_huh_tilt",          # Bouncy affirmative tilt
+    "head_tilt_roll",       # Gentle tilt loop
+    "neck_recoil",          # Snappy neck recoil pop
+    "sharp_side_tilt",      # Quick angular head tilt
+    # Playful moves
+    "chicken_peck",         # Pecking head bop loop
+    "side_peekaboo",        # Peekaboo side reveal
+    "side_glance_flick",    # Fast glance with flick
+    "chin_lead",            # Extended chin-led glides
+    "stumble_and_recover",  # Playful stumble and recover
+    # Energetic dances
+    "headbanger_combo",     # High-energy head isolation
+    "side_to_side_sway",    # Energetic side-to-side groove
+    "pendulum_swing",       # Even tempo pendulum motion
+    "dizzy_spin",           # Slow spin with antenna flair
+    # Complex choreography
+    "jackson_square",       # Precision hits with shoulder pops
+    "groovy_sway_and_roll", # Flowing sway with rolling torso
+    "interwoven_spirals",   # Layered spirals across axis
+    "polyrhythm_combo",     # Offset waves with counter beats
+    "grid_snap",            # Sharp grid-aligned accents
+]
+
+# Dance descriptions for LLM context
+DANCE_DESCRIPTIONS = {
+    "simple_nod": "Classic simple nod - for acknowledgment",
+    "yeah_nod": "Enthusiastic yeah nod - for excited agreement",
+    "uh_huh_tilt": "Bouncy affirmative tilt - for casual yes",
+    "head_tilt_roll": "Gentle tilt loop - subtle and calm",
+    "neck_recoil": "Snappy neck recoil pop - quick surprise",
+    "sharp_side_tilt": "Quick angular head tilt - attentive",
+    "chicken_peck": "Pecking head bop loop - silly and playful",
+    "side_peekaboo": "Peekaboo side reveal - fun and curious",
+    "side_glance_flick": "Fast glance with flick - mischievous",
+    "chin_lead": "Extended chin-led glides - smooth and cool",
+    "stumble_and_recover": "Playful stumble and recover - comedic",
+    "headbanger_combo": "High-energy head isolation - rock out",
+    "side_to_side_sway": "Energetic side-to-side groove - funky",
+    "pendulum_swing": "Even tempo pendulum motion - rhythmic",
+    "dizzy_spin": "Slow spin with antenna flair - celebration",
+    "jackson_square": "Precision hits with shoulder pops - dramatic",
+    "groovy_sway_and_roll": "Flowing sway with rolling torso - groovy",
+    "interwoven_spirals": "Layered spirals across axis - hypnotic",
+    "polyrhythm_combo": "Offset waves with counter beats - complex",
+    "grid_snap": "Sharp grid-aligned accents - robotic",
+}
 
 
 # Global reference to Reachy service (set during initialization)
@@ -182,20 +233,64 @@ def express_emotion_tool(emotion: EmotionType) -> str:
 
 
 @tool
-def dance_tool(dance_name: str = "default") -> str:
+def dance_tool(dance_name: DanceType) -> str:
     """
-    Make Reachy perform a dance move.
+    Make Reachy perform a dance move from the available repertoire.
     
-    Use this when the user asks Reachy to dance or celebrate.
+    Use this when the user asks Reachy to dance, celebrate, or move expressively.
+    Choose the dance based on the context:
+    
+    AVAILABLE DANCES:
+    - simple_nod: Classic nod for acknowledgment
+    - yeah_nod: Enthusiastic nod for excited agreement
+    - uh_huh_tilt: Bouncy tilt for casual yes
+    - head_tilt_roll: Gentle tilt loop, calm and subtle
+    - neck_recoil: Snappy pop for surprise
+    - sharp_side_tilt: Quick angular tilt, attentive
+    - chicken_peck: Silly pecking bop for playful moments
+    - side_peekaboo: Fun peekaboo reveal
+    - side_glance_flick: Mischievous quick glance
+    - chin_lead: Smooth chin-led glides, cool
+    - stumble_and_recover: Comedic stumble
+    - headbanger_combo: High-energy for rock/excitement
+    - side_to_side_sway: Funky side-to-side groove
+    - pendulum_swing: Rhythmic swinging motion
+    - dizzy_spin: Celebration spin with antenna flair
+    - jackson_square: Dramatic precision hits
+    - groovy_sway_and_roll: Smooth groovy flow
+    - interwoven_spirals: Hypnotic layered spirals
+    - polyrhythm_combo: Complex rhythmic waves
+    - grid_snap: Sharp robotic grid movements
     
     Args:
-        dance_name: Name of the dance to perform (default is a fun general dance)
+        dance_name: The specific dance move to perform
         
     Returns:
         Confirmation message with command token for the robot controller
     """
-    logger.info(f"dance_tool: Performing dance '{dance_name}'")
-    return f"Let me show you my moves! [CMD_DANCE_{dance_name.upper()}]"
+    dance_name_lower = dance_name.lower()
+    
+    # Validate dance name
+    if dance_name_lower not in DANCE_DESCRIPTIONS:
+        logger.warning(f"dance_tool: Unknown dance '{dance_name}', defaulting to simple_nod")
+        dance_name_lower = "simple_nod"
+    
+    description = DANCE_DESCRIPTIONS.get(dance_name_lower, "a cool move")
+    logger.info(f"dance_tool: Performing dance '{dance_name_lower}' - {description}")
+    
+    # Response varies based on dance type
+    dance_responses = {
+        "simple_nod": "Sure thing!",
+        "yeah_nod": "Oh yeah!",
+        "headbanger_combo": "Let's rock!",
+        "groovy_sway_and_roll": "Getting groovy!",
+        "chicken_peck": "Bawk bawk!",
+        "dizzy_spin": "Woohoo!",
+        "jackson_square": "Watch this!",
+    }
+    
+    response = dance_responses.get(dance_name_lower, "Check this out!")
+    return f"{response} [CMD_DANCE_{dance_name_lower.upper()}]"
 
 
 @tool

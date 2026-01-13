@@ -4,14 +4,12 @@ Vision node for handling image understanding requests.
 This node processes the current camera image and answers questions about it.
 """
 
-import logging
+from loguru import logger
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig, REACHY_IDENTITY, REACHY_OUTPUT_RULES
-
-logger = logging.getLogger(__name__)
 
 VISION_SYSTEM_PROMPT = f"""{REACHY_IDENTITY} You have a camera and can see your surroundings.
 
