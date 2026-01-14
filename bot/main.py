@@ -300,7 +300,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
                 "content": """You are Reachy, a friendly robot assistant. Keep responses SHORT.
 
 Keep the greeting short like this:
-Greeting: Hey Spencer! How can I help you?
+Hey Spencer! How can I help you?
 
 CRITICAL RULES:
 1. Your text goes to TTS - speak naturally, 1-2 sentences max
