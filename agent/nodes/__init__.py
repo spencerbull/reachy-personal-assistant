@@ -9,6 +9,8 @@ from agent.nodes.conversation import conversation_node
 from agent.nodes.vision import vision_node
 from agent.nodes.tools import tools_node
 from agent.nodes.image_gen import image_gen_node
+from agent.nodes.calendar import calendar_node
+from agent.nodes.email import email_node
 
 __all__ = [
     "router_node",
@@ -16,4 +18,6 @@ __all__ = [
     "vision_node",
     "tools_node",
     "image_gen_node",
+    "calendar_node",
+    "email_node",
 ]

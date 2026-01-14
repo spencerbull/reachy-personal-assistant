@@ -1,35 +1,28 @@
 """
-Tools node for handling tool execution requests.
+Tools node for handling physical robot actions and memory operations.
 
 This node processes requests that require calling tools like:
-- Reachy movement controls
-- Memory operations
-- External service calls (via MCP)
+- Reachy movement controls (look, turn, dance)
+- Memory operations (remember/recall object locations)
+- Image generation
+
+Note: Calendar and email are handled by dedicated sub-agents.
 """
 
-import os
 from typing import Optional
 
 from loguru import logger
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig, REACHY_IDENTITY, REACHY_OUTPUT_RULES
 
-# Get calendar ID from environment, default to "primary"
-DEFAULT_CALENDAR_ID = os.getenv("CALENDAR_ID", "primary")
-logger.info(f"Calendar ID configured: {DEFAULT_CALENDAR_ID[:30]}..." if len(DEFAULT_CALENDAR_ID) > 30 else f"Calendar ID configured: {DEFAULT_CALENDAR_ID}")
-
-from datetime import datetime, timedelta
-
 def get_tools_system_prompt() -> str:
-    """Build the tools system prompt with current environment settings."""
-    calendar_id = DEFAULT_CALENDAR_ID
-    # Get current time in ISO 8601 format for calendar queries
+    """Build the tools system prompt for robot actions and memory."""
+    from datetime import datetime
     now = datetime.now()
-    today_iso = now.strftime("%Y-%m-%dT00:00:00Z")
     today_display = now.strftime("%Y-%m-%d %H:%M")
     
     return f"""{REACHY_IDENTITY}
@@ -38,37 +31,42 @@ def get_tools_system_prompt() -> str:
 
 Current Date/Time: {today_display}
 
-You have access to tools. Use them by making tool calls - do NOT write out function syntax as text.
+You are handling physical robot actions and memory operations.
+Use tools by making tool calls - do NOT write out function syntax as text.
 
-TOOL CATEGORIES:
+AVAILABLE TOOLS:
 
-1. MOVEMENT: Use look_at_tool to move your head in different directions.
+1. MOVEMENT - Control the robot's head and body:
+   - look_at_tool: Move head to look in a direction (left, right, up, down, forward)
+   - turn_body_tool: Turn the robot's body
+   - enable_face_tracking_tool: Enable/disable automatic face tracking
+   - get_current_pose_tool: Get current head/body position
+   - scan_room_tool: Scan the room by looking around
+   - nod_tool: Nod the head (yes/no gesture)
 
-2. DANCE: Use dance_tool with one of these dance names:
-   groovy_sway_and_roll, chicken_peck, headbanger_combo, dizzy_spin, 
-   jackson_square, stumble_and_recover, side_to_side_sway, simple_nod, yeah_nod
+2. DANCE - Make the robot dance:
+   - dance_tool: Perform a dance. Available dances:
+     groovy_sway_and_roll, chicken_peck, headbanger_combo, dizzy_spin,
+     jackson_square, stumble_and_recover, side_to_side_sway, simple_nod, yeah_nod
 
-3. MEMORY: Use remember_location_tool and recall_location_tool for object locations.
+3. EMOTIONS - Express emotions:
+   - express_emotion_tool: Show emotion through body language
 
-4. EMAIL: Use search_emails, read_email, send_email for Gmail.
+4. MEMORY - Remember and recall object locations:
+   - remember_location_tool: Save where an object is located
+   - recall_location_tool: Retrieve where an object was stored
+   - list_remembered_objects_tool: List all remembered objects
+   - forget_object_tool: Forget an object's location
+   - set_location_context_tool: Set current location (office, home, etc.)
 
-5. CALENDAR: Use list-events, create-event, search-events for Google Calendar.
-   CRITICAL CALENDAR SETTINGS:
-   - Always set calendarId to: {calendar_id}
-   - Always set timeMin to: {today_iso}
-   - Always set maxResults to: 10
-
-6. IMAGE GENERATION: Use generate_image_tool to transform images into different styles.
-   - Takes a prompt describing the desired style and the current camera image
-   - Returns a URL to view the generated image
-   - ALWAYS include the URL in your response so the user can click to view it
-   - Example: "I've created your cyberpunk render! You can view it here: <url>"
+5. IMAGE GENERATION - Transform camera images:
+   - generate_image_tool: Transform the current camera view into different styles
+   - Returns a URL - ALWAYS include it in your response so user can view it
 
 RESPONSE RULES:
-- After tools return results, summarize them naturally in conversational speech.
-- For calendar: Say something like "You have a meeting at 2pm and dinner at 7pm."
-- NEVER output raw data, JSON, or function call text.
-- Speak naturally as if talking to the user.
+- After actions complete, confirm them naturally: "Looking left now." or "I remember your keys are on the desk."
+- NEVER output raw data or JSON
+- Speak naturally and briefly
 
 IMPORTANT: You must USE the tools via the tool calling interface. Do not write function calls as text."""
 

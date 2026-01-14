@@ -19,7 +19,7 @@ from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig
 
 # Route types
-RouteType = Literal["conversation", "vision", "tools", "image_gen"]
+RouteType = Literal["conversation", "vision", "tools", "image_gen", "calendar", "email"]
 
 ROUTER_SYSTEM_PROMPT = """You are a router that classifies user intents for a robot assistant named Reachy.
 
@@ -31,20 +31,27 @@ Analyze the user's message and determine the best route:
 2. "vision" - Questions requiring the robot to see/analyze the camera view
    Examples: "What do you see?", "What am I holding?", "Describe my surroundings", "What color is my shirt?"
 
-3. "tools" - Requests requiring actions, memory operations, or external services
+3. "tools" - Requests requiring physical robot actions or memory operations
    Examples: 
    - Movement: "Look left", "Turn around", "Look at me"
    - Memory: "Remember I put my keys here", "Where did I put my passport?"
    - Emotions: "Show me you're happy", "Be excited"
-   - Dance: "Dance for me", "Do a dance", "Show me your moves", "Celebrate!", "Do something silly"
-   - Calendar: "What's on my calendar?", "Check my schedule", "Am I free tomorrow at 3pm?", "Create an event", "What meetings do I have today?"
-   - Email: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
+   - Dance: "Dance for me", "Do a dance", "Show me your moves", "Celebrate!"
 
-IMPORTANT: If the message contains ANY indication of needing to see something, route to "vision".
-If the message asks the robot to DO something physical, remember something, or access external services (email, calendar), route to "tools".
+4. "calendar" - Any request about calendar, schedule, meetings, events, or appointments
+   Examples: "What's on my calendar?", "Check my schedule", "Am I free tomorrow?", "Create an event", "What meetings do I have?"
+
+5. "email" - Any request about email, inbox, sending/reading messages
+   Examples: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
+
+IMPORTANT: 
+- Calendar/schedule questions go to "calendar"
+- Email/inbox questions go to "email"
+- Physical robot actions go to "tools"
+- Visual questions go to "vision"
 
 Respond with ONLY a JSON object in this exact format:
-{"route": "conversation" | "vision" | "tools", "reason": "brief explanation"}"""
+{"route": "conversation" | "vision" | "tools" | "calendar" | "email", "reason": "brief explanation"}"""
 
 
 def create_router_llm(config: AgentConfig) -> ChatOpenAI:
@@ -85,7 +92,8 @@ def parse_router_response(response: str) -> tuple[RouteType, str]:
             reason = data.get("reason", "")
             
             # Validate route
-            if route not in ("conversation", "vision", "tools"):
+            valid_routes = ("conversation", "vision", "tools", "image_gen", "calendar", "email")
+            if route not in valid_routes:
                 logger.warning(f"Invalid route '{route}', defaulting to conversation")
                 route = "conversation"
             
@@ -163,7 +171,33 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         logger.info(f"Router: Fast path -> vision (keyword match)")
         return {"route": "vision"}
     
-    # Tool keywords - physical actions, memory, and external services
+    # Calendar keywords - calendar, schedule, meetings, events
+    calendar_keywords = [
+        "calendar", "schedule", "appointment", "meeting",
+        "what's on my calendar", "check my calendar", "my events",
+        "upcoming events", "events today", "events tomorrow", "events this week",
+        "create event", "add event", "schedule event", "book a meeting",
+        "free time", "am i free", "am i available", "availability",
+        "when am i free", "find a time", "busy", "freebusy",
+    ]
+    if any(kw in lower_msg for kw in calendar_keywords):
+        logger.info(f"Router: Fast path -> calendar (keyword match)")
+        return {"route": "calendar"}
+    
+    # Email keywords - email, inbox, messages
+    email_keywords = [
+        "email", "gmail", "inbox", "send email", "send an email",
+        "read email", "read my email", "check email", "check my email",
+        "unread email", "new email", "latest email", "recent email",
+        "mail", "mailbox", "message from", "email from",
+        "reply to", "forward email", "compose email", "draft email",
+        "search email", "find email",
+    ]
+    if any(kw in lower_msg for kw in email_keywords):
+        logger.info(f"Router: Fast path -> email (keyword match)")
+        return {"route": "email"}
+    
+    # Tool keywords - physical actions and memory operations (no calendar/email)
     tool_keywords = [
         # Head movement
         "look left", "look right", "look up", "look down", "look at me",
@@ -183,21 +217,7 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         "dance", "dancing", "celebrate", "wave", "nod", "shake your head",
         "show me a move", "do a move", "do a dance", "groove", "boogie",
         "headbang", "sway", "spin around", "bust a move", "show off",
-        # Calendar
-        "calendar", "schedule", "appointment", "meeting",
-        "what's on my calendar", "check my calendar", "my events",
-        "upcoming events", "events today", "events tomorrow", "events this week",
-        "create event", "add event", "schedule event", "book a meeting",
-        "free time", "am i free", "am i available", "availability",
-        "when am i free", "find a time", "busy", "freebusy",
-        # Email/Gmail
-        "email", "gmail", "inbox", "send email", "send an email",
-        "read email", "read my email", "check email", "check my email",
-        "unread email", "new email", "latest email", "recent email",
-        "mail", "mailbox", "message from", "email from",
-        "reply to", "forward email", "compose email", "draft email",
-        "search email", "find email",
-        # General reminders
+        # General reminders (physical object location)
         "reminder",
     ]
     if any(kw in lower_msg for kw in tool_keywords):
@@ -255,5 +275,9 @@ def get_next_node(state: ReachyAgentState) -> str:
         return "tools"
     elif route == "image_gen":
         return "image_gen"
+    elif route == "calendar":
+        return "calendar"
+    elif route == "email":
+        return "email"
     else:
         return "conversation"

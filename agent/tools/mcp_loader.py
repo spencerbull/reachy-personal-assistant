@@ -26,6 +26,7 @@ class MCPServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     description: str = ""
+    enabled_tools: Optional[list[str]] = None  # If set, only these tools will be loaded from this server
 
 
 # Default MCP server configurations
@@ -61,7 +62,7 @@ class MCPToolLoader:
             server_configs: List of MCP server configurations
         """
         self._configs = server_configs or DEFAULT_MCP_SERVERS
-        self._client = None
+        self._clients: list = []  # One client per server for proper filtering
         self._tools = []
         self._loaded = False
     
@@ -77,7 +78,10 @@ class MCPToolLoader:
         """
         Load tools from all configured MCP servers.
         
-        The client connection is kept alive - call close() when done.
+        Each server is loaded individually so we can filter its tools based on
+        the enabled_tools config before combining them.
+        
+        The client connections are kept alive - call close() when done.
         
         Returns:
             List of LangChain-compatible tools
@@ -86,6 +90,7 @@ class MCPToolLoader:
             return self._tools
         
         self._tools = []
+        self._clients = []  # Track all clients for cleanup
         
         # Check if langchain-mcp-adapters is available
         try:
@@ -110,52 +115,69 @@ class MCPToolLoader:
         
         logger.info(f"Loading tools from {len(enabled_servers)} MCP servers...")
         
-        try:
-            # Configure servers for MultiServerMCPClient
-            # New API in langchain-mcp-adapters 0.2+ requires 'transport' key
-            server_params = {}
-            for config in enabled_servers:
+        # Load each server individually so we can filter per-server
+        for config in enabled_servers:
+            try:
+                # Build single-server config
                 server_config = {
-                    "transport": "stdio",  # Required in new API
+                    "transport": "stdio",
                     "command": config.command[0],
                     "args": config.command[1:] if len(config.command) > 1 else [],
                 }
                 if config.env:
                     server_config["env"] = config.env
-                server_params[config.name] = server_config
-            
-            logger.info(f"MCP server configs: {list(server_params.keys())}")
-            
-            # Create client and get tools (new API - no context manager)
-            self._client = MultiServerMCPClient(server_params)
-            self._tools = await self._client.get_tools()
-            logger.info(f"Loaded {len(self._tools)} tools from MCP servers")
-            
-            for tool in self._tools:
-                desc = tool.description[:50] if tool.description else "No description"
-                logger.info(f"  - {tool.name}: {desc}...")
-            
-            self._loaded = True
-            
-        except Exception as e:
-            logger.error(f"Failed to load MCP tools: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            self._tools = []
-            self._client = None
+                
+                server_params = {config.name: server_config}
+                
+                logger.info(f"Loading tools from server: {config.name}")
+                
+                # Create client and get tools for this server
+                client = MultiServerMCPClient(server_params)
+                server_tools = await client.get_tools()
+                self._clients.append(client)  # Keep reference for cleanup
+                
+                logger.info(f"  Server '{config.name}' returned {len(server_tools)} tools")
+                
+                # Apply filtering if enabled_tools is set for this server
+                if config.enabled_tools is not None:
+                    enabled_set = set(config.enabled_tools)
+                    filtered_tools = [t for t in server_tools if t.name in enabled_set]
+                    excluded = [t.name for t in server_tools if t.name not in enabled_set]
+                    
+                    logger.info(f"  Filtering '{config.name}': keeping {len(filtered_tools)}, excluding {len(excluded)}")
+                    if excluded:
+                        logger.info(f"  Excluded tools: {excluded}")
+                    
+                    self._tools.extend(filtered_tools)
+                else:
+                    # No filtering - include all tools from this server
+                    self._tools.extend(server_tools)
+                
+            except Exception as e:
+                logger.error(f"Failed to load tools from server '{config.name}': {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        logger.info(f"Final tool count: {len(self._tools)} tools")
+        
+        for tool in self._tools:
+            desc = tool.description[:50] if tool.description else "No description"
+            logger.info(f"  - {tool.name}: {desc}...")
+        
+        self._loaded = True
         
         return self._tools
     
     async def close(self):
         """Clean up MCP client connections."""
-        if self._client:
+        for client in self._clients:
             try:
                 # New API doesn't require explicit close
-                if hasattr(self._client, 'close'):
-                    await self._client.close()
+                if hasattr(client, 'close'):
+                    await client.close()
             except Exception as e:
                 logger.warning(f"Error closing MCP client: {e}")
-            self._client = None
+        self._clients = []
         self._tools = []
         self._loaded = False
 
@@ -203,6 +225,11 @@ def create_calendar_mcp_config(credentials_path: Optional[str] = None, enabled: 
     
     See: https://github.com/nspady/google-calendar-mcp
     
+    Environment Variables:
+        GCAL_ENABLED_TOOLS: Comma-separated list of tool names to enable.
+            Example: GCAL_ENABLED_TOOLS=list-events,create-event,get-current-time,update-event
+            If not set, all tools from the server will be available.
+    
     Args:
         credentials_path: Path to OAuth credentials file (optional, uses default location)
         enabled: Whether the server is enabled
@@ -210,9 +237,21 @@ def create_calendar_mcp_config(credentials_path: Optional[str] = None, enabled: 
     Returns:
         MCP server configuration
     """
+    import os
+    
     env = {}
     if credentials_path:
         env["GOOGLE_OAUTH_CREDENTIALS"] = credentials_path
+    
+    # Parse GCAL_ENABLED_TOOLS environment variable for tool filtering
+    # If not set or empty, all tools will be available (no filtering)
+    enabled_tools = None
+    gcal_tools_env = os.getenv("GCAL_ENABLED_TOOLS")
+    if gcal_tools_env:
+        parsed_tools = [tool.strip() for tool in gcal_tools_env.split(",") if tool.strip()]
+        if parsed_tools:  # Only set if we have actual tool names
+            enabled_tools = parsed_tools
+            logger.info(f"Google Calendar MCP tools filtered to: {enabled_tools}")
     
     return MCPServerConfig(
         name="google_calendar",
@@ -220,6 +259,7 @@ def create_calendar_mcp_config(credentials_path: Optional[str] = None, enabled: 
         env=env,
         description="Google Calendar access for scheduling, events, and reminders",
         enabled=enabled,
+        enabled_tools=enabled_tools,
     )
 
 
@@ -291,6 +331,7 @@ def create_gmail_mcp_config(enabled: bool = True) -> MCPServerConfig:
     
     Uses the @gongrzhe/server-gmail-autoauth-mcp package which provides:
     - send_email: Send emails with attachments
+    - draft_email: Create email drafts
     - read_email: Read email content by ID
     - search_emails: Search using Gmail query syntax
     - list_labels: List all Gmail labels
@@ -302,15 +343,33 @@ def create_gmail_mcp_config(enabled: bool = True) -> MCPServerConfig:
     3. Save credentials to ~/.gmail-mcp/gcp-oauth.keys.json
     4. Run: npx @gongrzhe/server-gmail-autoauth-mcp auth
     
+    Environment Variables:
+        GMAIL_ENABLED_TOOLS: Comma-separated list of tool names to enable.
+            Example: GMAIL_ENABLED_TOOLS=send_email,draft_email,read_email,search_emails
+            If not set, all tools from the server will be available.
+    
     Returns:
         MCP server configuration
     """
+    import os
+    
+    # Parse GMAIL_ENABLED_TOOLS environment variable for tool filtering
+    # If not set or empty, all tools will be available (no filtering)
+    enabled_tools = None
+    gmail_tools_env = os.getenv("GMAIL_ENABLED_TOOLS")
+    if gmail_tools_env:
+        parsed_tools = [tool.strip() for tool in gmail_tools_env.split(",") if tool.strip()]
+        if parsed_tools:  # Only set if we have actual tool names
+            enabled_tools = parsed_tools
+            logger.info(f"Gmail MCP tools filtered to: {enabled_tools}")
+    
     return MCPServerConfig(
         name="gmail",
         command=["npx", "-y", "@gongrzhe/server-gmail-autoauth-mcp"],
         env={},  # Uses credentials from ~/.gmail-mcp/
         description="Gmail access for reading, sending, searching emails and managing labels",
         enabled=enabled,
+        enabled_tools=enabled_tools,
     )
 
 
