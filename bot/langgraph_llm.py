@@ -442,35 +442,18 @@ class LangGraphLLMService(LLMService):
             if pending_commands:
                 logger.info(f"Pending Reachy commands: {pending_commands}")
             
-            # Check for URLs to filter from TTS
-            import re
-            
-            # Extract any URL from the response
-            url_match = re.search(r'https?://[^\s]+', response_text)
-            image_url = url_match.group(0) if url_match else None
-            
-            # Create spoken text by removing URL and "Image URL:" prefix
-            spoken_text = response_text
+            # Clean up "Image URL:" prefix but keep the URL in the text
+            # The URL will be captured by transcript, then stripped by URLFilterProcessor before TTS
+            display_text = response_text
             if "\n\nImage URL:" in response_text:
-                spoken_text = response_text.split("\n\nImage URL:")[0].strip()
-                logger.info(f"Filtered URL from TTS. Spoken: {spoken_text[:50]}...")
-            else:
-                # Also filter any raw URLs from spoken text
-                spoken_text = re.sub(r'https?://[^\s]+', '', spoken_text)
-                spoken_text = re.sub(r'\s+', ' ', spoken_text).strip()
+                # Replace "Image URL: http://..." with just the URL on its own line
+                display_text = response_text.replace("\n\nImage URL:", "\n\n🖼️")
             
-            # Send spoken text to TTS pipeline (this is what gets spoken)
+            # Send full text (with URL) - transcript captures it, URLFilter strips URL before TTS
             await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(LLMTextFrame(text=spoken_text))
+            await self.push_frame(LLMTextFrame(text=display_text))
             await self.push_frame(LLMFullResponseEndFrame())
-            logger.info("Response frames pushed (spoken text only)")
-            
-            # If there's an image URL, also push the URL as a separate text frame
-            # This should appear in the transcript after the spoken text
-            if image_url:
-                # Push just the URL line as additional text for the transcript
-                await self.push_frame(TextFrame(text=f"\n\nImage URL: {image_url}"))
-                logger.info(f"Pushed image URL to transcript: {image_url}")
+            logger.info("Response frames pushed")
             
         except Exception as e:
             logger.error(f"LangGraph processing error: {e}", exc_info=True)

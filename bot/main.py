@@ -22,7 +22,43 @@ from pipecat.processors.aggregators.llm_response_universal import LLMContextAggr
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIObserver
 from pipecat.processors.transcript_processor import TranscriptProcessor
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+from pipecat.frames.frames import LLMTextFrame
 from pipecat.runner.types import RunnerArguments
+
+
+class URLExtractorProcessor(FrameProcessor):
+    """
+    Extracts URLs from LLMTextFrame, sends full text to transport for chat display,
+    then strips URL and passes cleaned text to TTS.
+    """
+    
+    def __init__(self, transport_output):
+        super().__init__()
+        self._transport = transport_output
+    
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        
+        if isinstance(frame, LLMTextFrame) and frame.text:
+            # Check for URL in the text
+            url_match = re.search(r'https?://[^\s]+', frame.text)
+            
+            if url_match:
+                # Send full text (with URL) directly to transport for chat display
+                # TextFrame bypasses TTS but reaches the transport output
+                logger.info(f"URLExtractor: Sending full text with URL to chat")
+                await self._transport.process_frame(
+                    TextFrame(text=frame.text),
+                    FrameDirection.DOWNSTREAM
+                )
+                
+                # Strip URL from text before sending to TTS
+                filtered = re.sub(r'https?://[^\s]+', '', frame.text)
+                filtered = re.sub(r'\s+', ' ', filtered).strip()
+                logger.info(f"URLExtractor: Stripped URL for TTS: {filtered[:50]}...")
+                frame = LLMTextFrame(text=filtered)
+        
+        await self.push_frame(frame, direction)
 from pipecat.runner.utils import (
     create_transport,
     get_transport_client_id,
@@ -305,6 +341,9 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
         transport_input = transport.input()
         transport_output = transport.output()
 
+        # URL extractor sends full text (with URL) to transport, strips URL for TTS
+        url_extractor = URLExtractorProcessor(transport_output)
+        
         pipeline = Pipeline(
             [
                 transport_input,  # Transport user input
@@ -315,7 +354,8 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
                 context_aggregator.user(),  # User responses
                 llm,  # LLM (LangGraph or NAT)
                 command_processor,  # Process [CMD_*] tokens and execute robot commands
-                tts,  # TTS
+                url_extractor,  # Extract URL -> send to chat, strip for TTS
+                tts,  # TTS (speaks text without URLs)
                 ReachyWobblerProcessor(),
                 transport_output,  # Transport bot output
                 transcript.assistant(),  # Capture assistant transcripts
@@ -335,7 +375,7 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
 
         @transcript.event_handler("on_transcript_update")
         async def handle_transcript_update(processor, frame):
-            """Handle transcript updates and send them to the web UI"""
+            """Handle transcript updates and log them"""
             for message in frame.messages:
                 logger.info(f"Transcript [{message.role}]: {message.content}")
 

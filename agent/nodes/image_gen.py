@@ -274,11 +274,10 @@ async def image_gen_node(
                     image_url = result["image_url"]
                     logger.info(f"Image generation successful! URL: {image_url}")
                     
-                    # Format response with raw URL on a new line
-                    # TTS will filter the URL, but it will appear in chat
+                    # Format response - URL will be appended to transcript by bot
                     spoken_response = f"I've created your {user_message} image! What do you think?"
                     
-                    # Full response includes raw URL for chat display
+                    # Full response includes URL for extraction
                     response_content = f"{spoken_response}\n\nImage URL: {image_url}"
                     
                     return {
