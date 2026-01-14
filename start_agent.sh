@@ -55,7 +55,7 @@ if [[ "$AGENT_BACKEND" == "langgraph" ]]; then
     fi
     
     # Run langgraph using the agent's venv but from project root
-    "$SCRIPT_DIR/agent/.venv/bin/langgraph" dev --config "$SCRIPT_DIR/langgraph.json" --port 8001 "${REMAINING_ARGS[@]}"
+    "$SCRIPT_DIR/agent/.venv/bin/langgraph" dev --config "$SCRIPT_DIR/langgraph.json" --port 8031 "${REMAINING_ARGS[@]}"
     
 elif [[ "$AGENT_BACKEND" == "nat" ]]; then
     echo "Starting NAT (NeMo Agent Toolkit) Service..."

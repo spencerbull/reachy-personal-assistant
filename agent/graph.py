@@ -19,8 +19,10 @@ from agent.nodes.router import router_node, get_next_node
 from agent.nodes.conversation import conversation_node
 from agent.nodes.vision import vision_node
 from agent.nodes.tools import tools_node
+from agent.nodes.image_gen import image_gen_node
 from agent.tools.reachy_tools import get_all_reachy_tools
 from agent.tools.memory_tools import get_all_memory_tools
+from agent.tools.comfyui_tools import get_all_comfyui_tools
 
 
 def create_graph(
@@ -42,7 +44,7 @@ def create_graph(
     config = config or AgentConfig.from_env()
     
     # Collect all tools
-    all_tools = get_all_reachy_tools() + get_all_memory_tools()
+    all_tools = get_all_reachy_tools() + get_all_memory_tools() + get_all_comfyui_tools()
     if additional_tools:
         all_tools.extend(additional_tools)
     
@@ -61,6 +63,9 @@ def create_graph(
     async def tools_with_config(state: ReachyAgentState) -> dict:
         return await tools_node(state, config, all_tools)
     
+    async def image_gen_with_config(state: ReachyAgentState) -> dict:
+        return await image_gen_node(state, config, all_tools)
+    
     # Build the graph
     builder = StateGraph(ReachyAgentState)
     
@@ -69,6 +74,7 @@ def create_graph(
     builder.add_node("conversation", conversation_with_config)
     builder.add_node("vision", vision_with_config)
     builder.add_node("tools", tools_with_config)
+    builder.add_node("image_gen", image_gen_with_config)
     
     # Add edges
     # Start -> Router
@@ -82,6 +88,7 @@ def create_graph(
             "conversation": "conversation",
             "vision": "vision",
             "tools": "tools",
+            "image_gen": "image_gen",
         }
     )
     
@@ -89,6 +96,7 @@ def create_graph(
     builder.add_edge("conversation", END)
     builder.add_edge("vision", END)
     builder.add_edge("tools", END)
+    builder.add_edge("image_gen", END)
     
     # Compile the graph
     # Note: When running via LangGraph CLI (langgraph dev), persistence is 

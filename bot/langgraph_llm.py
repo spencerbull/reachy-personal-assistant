@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent.graph import create_graph, create_graph_with_mcp
 from agent.config import AgentConfig
 from agent.tools.mcp_loader import get_all_mcp_configs, MCPToolLoader, is_gmail_configured
+from langgraph.checkpoint.memory import MemorySaver
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
@@ -74,8 +75,15 @@ class LangGraphLLMService(LLMService):
         self._mcp_loader = None
         self._mcp_initialized = False
         
-        # Create initial graph (MCP tools loaded in initialize_mcp())
-        self._graph = create_graph(config=self._config, additional_tools=self._mcp_tools)
+        # Create checkpointer for state persistence across turns
+        self._checkpointer = MemorySaver()
+        
+        # Create initial graph with checkpointer (MCP tools loaded in initialize_mcp())
+        self._graph = create_graph(
+            config=self._config,
+            checkpointer=self._checkpointer,
+            additional_tools=self._mcp_tools
+        )
         
         # Image processing settings
         self._max_image_dimension = max_image_dimension
@@ -87,6 +95,8 @@ class LangGraphLLMService(LLMService):
         self._last_image: Optional[UserImageRawFrame] = None
         self._current_turn_has_image: bool = False
         self._pending_image_future: Optional[asyncio.Future] = None
+        self._transport = None  # Transport for sending chat messages directly
+        self._rtvi_processor = None  # RTVI processor for sending server messages
         
         # Log MCP status
         if is_gmail_configured():
@@ -122,9 +132,13 @@ class LangGraphLLMService(LLMService):
                 for tool in mcp_tools:
                     logger.info(f"  - {tool.name}")
                 
-                # Recreate graph with MCP tools
+                # Recreate graph with MCP tools and checkpointer
                 all_tools = self._mcp_tools + mcp_tools
-                self._graph = create_graph(config=self._config, additional_tools=all_tools)
+                self._graph = create_graph(
+                    config=self._config,
+                    checkpointer=self._checkpointer,
+                    additional_tools=all_tools
+                )
                 self._mcp_loader = loader
             else:
                 logger.info("No MCP tools loaded")
@@ -140,6 +154,16 @@ class LangGraphLLMService(LLMService):
         self._user_id = user_id
         self._thread_id = f"user_{user_id}"
         logger.info(f"User ID set to {user_id}, thread_id: {self._thread_id}")
+
+    def set_transport(self, transport):
+        """Set the transport for sending chat messages directly."""
+        self._transport = transport
+        logger.info("Transport configured for direct chat messaging")
+
+    def set_rtvi_processor(self, rtvi):
+        """Set the RTVI processor for sending server messages."""
+        self._rtvi_processor = rtvi
+        logger.info("RTVI processor configured for server messaging")
 
     def _resize_image(self, image: Image.Image) -> Image.Image:
         """Resize image to stay within max dimension while preserving aspect ratio."""
@@ -386,7 +410,9 @@ class LangGraphLLMService(LLMService):
             pending_commands = []
             
             if "messages" in result:
-                for msg in result["messages"]:
+                # Iterate in REVERSE to get the LAST (most recent) AIMessage
+                # With MemorySaver, all previous messages are kept in state
+                for msg in reversed(result["messages"]):
                     if isinstance(msg, AIMessage):
                         response_text = msg.content
                         break
@@ -416,12 +442,35 @@ class LangGraphLLMService(LLMService):
             if pending_commands:
                 logger.info(f"Pending Reachy commands: {pending_commands}")
             
-            # Send response through pipeline
-            # Use LLMTextFrame (which extends TextFrame) - same as OpenAI LLM service
+            # Check for URLs to filter from TTS
+            import re
+            
+            # Extract any URL from the response
+            url_match = re.search(r'https?://[^\s]+', response_text)
+            image_url = url_match.group(0) if url_match else None
+            
+            # Create spoken text by removing URL and "Image URL:" prefix
+            spoken_text = response_text
+            if "\n\nImage URL:" in response_text:
+                spoken_text = response_text.split("\n\nImage URL:")[0].strip()
+                logger.info(f"Filtered URL from TTS. Spoken: {spoken_text[:50]}...")
+            else:
+                # Also filter any raw URLs from spoken text
+                spoken_text = re.sub(r'https?://[^\s]+', '', spoken_text)
+                spoken_text = re.sub(r'\s+', ' ', spoken_text).strip()
+            
+            # Send spoken text to TTS pipeline (this is what gets spoken)
             await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(LLMTextFrame(text=response_text))
+            await self.push_frame(LLMTextFrame(text=spoken_text))
             await self.push_frame(LLMFullResponseEndFrame())
-            logger.info("Response frames pushed")
+            logger.info("Response frames pushed (spoken text only)")
+            
+            # If there's an image URL, also push the URL as a separate text frame
+            # This should appear in the transcript after the spoken text
+            if image_url:
+                # Push just the URL line as additional text for the transcript
+                await self.push_frame(TextFrame(text=f"\n\nImage URL: {image_url}"))
+                logger.info(f"Pushed image URL to transcript: {image_url}")
             
         except Exception as e:
             logger.error(f"LangGraph processing error: {e}", exc_info=True)

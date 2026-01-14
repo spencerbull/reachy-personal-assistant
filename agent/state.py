@@ -145,6 +145,20 @@ class ReachyAgentState(TypedDict):
     
     # Pending Reachy commands to execute
     pending_reachy_commands: list[dict]
+    
+    # Image generation state
+    # Contains: phase, previous_messages, style_details, etc.
+    image_gen_context: Optional[dict]
+    
+    # Base64-encoded source image captured when user presents it
+    # This is stored separately from current_image to persist through follow-up turns
+    captured_source_image: Optional[str]
+    
+    # Base64-encoded generated image from ComfyUI
+    generated_image: Optional[str]
+    
+    # Vision description of the original input image
+    original_image_description: Optional[str]
 
 
 def create_initial_state() -> ReachyAgentState:
@@ -160,6 +174,10 @@ def create_initial_state() -> ReachyAgentState:
         route=None,
         tool_results=None,
         pending_reachy_commands=[],
+        image_gen_context=None,
+        captured_source_image=None,
+        generated_image=None,
+        original_image_description=None,
     )
 
 

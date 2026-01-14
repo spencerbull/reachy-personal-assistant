@@ -58,6 +58,12 @@ TOOL CATEGORIES:
    - Always set timeMin to: {today_iso}
    - Always set maxResults to: 10
 
+6. IMAGE GENERATION: Use generate_image_tool to transform images into different styles.
+   - Takes a prompt describing the desired style and the current camera image
+   - Returns a URL to view the generated image
+   - ALWAYS include the URL in your response so the user can click to view it
+   - Example: "I've created your cyberpunk render! You can view it here: <url>"
+
 RESPONSE RULES:
 - After tools return results, summarize them naturally in conversational speech.
 - For calendar: Say something like "You have a meeting at 2pm and dinner at 7pm."

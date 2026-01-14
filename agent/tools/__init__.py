@@ -4,6 +4,7 @@ Tools for the Reachy Personal Assistant.
 Provides LangChain-compatible tools for:
 - Robot movement and control
 - Memory operations (spatial and long-term)
+- Image generation (ComfyUI)
 - MCP server integrations
 """
 
@@ -21,6 +22,11 @@ from agent.tools.memory_tools import (
     get_all_memory_tools,
 )
 
+from agent.tools.comfyui_tools import (
+    generate_image_tool,
+    get_all_comfyui_tools,
+)
+
 __all__ = [
     "look_at_tool",
     "turn_body_tool", 
@@ -30,4 +36,6 @@ __all__ = [
     "remember_location_tool",
     "recall_location_tool",
     "get_all_memory_tools",
+    "generate_image_tool",
+    "get_all_comfyui_tools",
 ]

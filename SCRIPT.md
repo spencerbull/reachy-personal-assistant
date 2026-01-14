@@ -37,7 +37,7 @@ Before running demos:
 **User**: "Tell me about your hardware"
 
 **Reachy** (excited):
-> Oh, you want to know about my brain? I'm running on the NVIDIA GB10 Grace Blackwell Superchip. It's basically the Formula 1 engine of AI processors. I can crunch a quadrillion calculations per second. And the best part? I do everything locally. Your secrets are safe with me since I don't need to send anything to the cloud.
+> Oh, you want to know about my brain? I'm running on the NVIDIA GB10 Grace Blackwell Superchip. I can crunch a quadrillion calculations per second. And the best part? I do everything locally. Your secrets are safe with me since I don't need to send anything to the cloud.
 
 ---
 

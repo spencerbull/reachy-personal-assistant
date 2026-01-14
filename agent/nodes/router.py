@@ -5,6 +5,7 @@ Determines which path the conversation should take:
 - conversation: Simple chitchat and casual responses
 - vision: Questions requiring image understanding
 - tools: Requests requiring tool execution (movement, memory, etc.)
+- image_gen: Requests for image transformation/generation
 """
 
 import json
@@ -18,7 +19,7 @@ from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig
 
 # Route types
-RouteType = Literal["conversation", "vision", "tools"]
+RouteType = Literal["conversation", "vision", "tools", "image_gen"]
 
 ROUTER_SYSTEM_PROMPT = """You are a router that classifies user intents for a robot assistant named Reachy.
 
@@ -113,8 +114,29 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         logger.warning("No user message found in state")
         return {"route": "conversation"}
     
+    # Check if we're in the middle of an image generation conversation
+    image_gen_context = state.get("image_gen_context")
+    captured_source_image = state.get("captured_source_image")
+    
+    if image_gen_context or captured_source_image:
+        phase = image_gen_context.get("phase") if image_gen_context else "collecting_details"
+        logger.info(f"Router: Fast path -> image_gen (continuing conversation, phase={phase})")
+        return {"route": "image_gen"}
+    
     # Check for obvious patterns first (fast path)
     lower_msg = user_message.lower()
+    
+    # Image generation keywords - transform, render, style transfer requests
+    image_gen_keywords = [
+        "render", "rendering", "generate image", "create image", "make image",
+        "transform image", "transform this", "transform the", "transform it",
+        "3d render", "style transfer", "stylize", "reimagine", "recreate",
+        "turn this into", "convert this to", "make this look like",
+        "create a rendering", "help me render", "can you render",
+    ]
+    if any(kw in lower_msg for kw in image_gen_keywords):
+        logger.info(f"Router: Fast path -> image_gen (keyword match)")
+        return {"route": "image_gen"}
     
     # Vision keywords - anything that requires seeing/analyzing visual input
     vision_keywords = [
@@ -218,6 +240,11 @@ def should_route_to_conversation(state: ReachyAgentState) -> bool:
     return state.get("route") == "conversation"
 
 
+def should_route_to_image_gen(state: ReachyAgentState) -> bool:
+    """Check if the route is image_gen."""
+    return state.get("route") == "image_gen"
+
+
 def get_next_node(state: ReachyAgentState) -> str:
     """Determine the next node based on the route."""
     route = state.get("route", "conversation")
@@ -226,5 +253,7 @@ def get_next_node(state: ReachyAgentState) -> str:
         return "vision"
     elif route == "tools":
         return "tools"
+    elif route == "image_gen":
+        return "image_gen"
     else:
         return "conversation"
