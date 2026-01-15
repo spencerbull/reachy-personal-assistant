@@ -79,7 +79,7 @@
     "inputs": {
       "prompt": "Take the character in the picture and have him walking as a giant through manhattan from a skyview. make the character blend in with the environment as it is a real 3D character walking through the city. Think of marshmellow man from ghostbusters. Change the characters pose to be grabbing a building and causing mahaem\n",
       "operation_mode": "generate_images",
-      "model_name": "gemini-2.5-flash-image-preview",
+      "model_name": "gemini-3-pro-image-preview",
       "temperature": 0.8,
       "seed": 262645598,
       "sequential_generation": false,

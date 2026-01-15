@@ -583,7 +583,24 @@ class MovementManager:
             degrees=False,
             mm=False,
         )
-        return (secondary_head_pose, (0.0, 0.0), 0.0)
+        
+        # Add continuous antenna wiggle when face tracking is active
+        # This gives the impression Reachy is attentively listening
+        antenna_offsets = (0.0, 0.0)
+        face_tracking_active = (
+            abs(self.state.face_tracking_offsets[4]) > 0.001 or  # pitch
+            abs(self.state.face_tracking_offsets[5]) > 0.001     # yaw
+        )
+        
+        if face_tracking_active:
+            # Gentle antenna wiggle - both antennas move opposite directions
+            wiggle_amplitude = np.deg2rad(12)  # 12 degrees
+            wiggle_frequency = 0.6  # Hz - gentle sway
+            t = self._now()
+            wiggle = wiggle_amplitude * np.sin(2 * np.pi * wiggle_frequency * t)
+            antenna_offsets = (wiggle, -wiggle)  # Opposite directions
+        
+        return (secondary_head_pose, antenna_offsets, 0.0)
 
     def _compose_full_body_pose(self, current_time: float) -> FullBodyPose:
         """Compose primary and secondary poses into a single command pose."""

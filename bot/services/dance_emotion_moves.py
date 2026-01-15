@@ -152,3 +152,54 @@ class GotoQueueMove(Move):  # type: ignore
             target_head_pose_f64 = self.target_head_pose.astype(np.float64)
             target_antennas_array = np.array([self.target_antennas[0], self.target_antennas[1]], dtype=np.float64)
             return (target_head_pose_f64, target_antennas_array, self.target_body_yaw)
+
+
+class AntennaWaveMove(Move):  # type: ignore
+    """Quick antenna wave gesture for greeting when a face is detected.
+    
+    This move animates only the right antenna with a decaying sine wave
+    to create a friendly wave gesture.
+    """
+
+    def __init__(self, duration: float = 0.8):
+        """Initialize an AntennaWaveMove.
+        
+        Args:
+            duration: Total duration of the wave animation in seconds
+        """
+        self._duration = duration
+        self.wave_amplitude = np.deg2rad(30)  # 30 degrees max amplitude
+        self.wave_frequency = 3.0  # 3 waves per second
+
+    @property
+    def duration(self) -> float:
+        """Duration property required by official Move interface."""
+        return self._duration
+
+    def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
+        """Evaluate antenna wave move at time t.
+        
+        Only animates the right antenna (index 1) with a sine wave that
+        decays linearly over the duration.
+        """
+        try:
+            from reachy_mini.utils import create_head_pose
+
+            # Linear decay envelope (1.0 -> 0.0 over duration)
+            envelope = max(0.0, 1.0 - (t / self._duration))
+            
+            # Sine wave with decaying amplitude for right antenna
+            right_antenna = self.wave_amplitude * np.sin(2 * np.pi * self.wave_frequency * t) * envelope
+            
+            # Return neutral head pose, animated right antenna, no body rotation
+            neutral_head = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+            antennas = np.array([0.0, right_antenna], dtype=np.float64)
+            
+            return (neutral_head, antennas, 0.0)
+
+        except Exception as e:
+            logger.error(f"Error evaluating antenna wave at t={t}: {e}")
+            # Return neutral pose on error
+            from reachy_mini.utils import create_head_pose
+            neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+            return (neutral_head_pose, np.array([0.0, 0.0], dtype=np.float64), 0.0)

@@ -89,9 +89,13 @@ class FaceDetector:
                 results = self._detector.process(rgb_frame)
                 
                 if results.detections:
-                    # Get the first (most confident) detection
-                    detection = results.detections[0]
-                    bbox = detection.location_data.relative_bounding_box
+                    # Get the largest face by bounding box area
+                    largest_detection = max(
+                        results.detections,
+                        key=lambda d: d.location_data.relative_bounding_box.width * 
+                                      d.location_data.relative_bounding_box.height
+                    )
+                    bbox = largest_detection.location_data.relative_bounding_box
                     
                     # Calculate center
                     center_x = bbox.xmin + bbox.width / 2
@@ -153,7 +157,7 @@ class CameraWorker:
         self._face_detector = FaceDetector()
         
         # Face tracking state
-        self.is_face_tracking_enabled = False  # Disabled by default
+        self.is_face_tracking_enabled = True  # Enabled by default
         self.face_tracking_offsets: List[float] = [
             0.0, 0.0, 0.0,  # x, y, z
             0.0, 0.0, 0.0,  # roll, pitch, yaw
@@ -167,16 +171,43 @@ class CameraWorker:
         # Face tracking timing variables
         self.last_face_detected_time: float | None = None
         self.face_lost_delay = 2.0  # Seconds before resetting to neutral
-        self.interpolation_duration = 0.5  # Smoothing duration
         
-        # Tracking gain (how fast to move toward face)
-        self.tracking_gain_yaw = 0.3  # Radians per unit deviation
-        self.tracking_gain_pitch = 0.2
+        # Offset-based tracking configuration (smooth 100Hz blending via MovementManager)
+        # Target position: top 1/3 of frame so Reachy looks UP at user naturally
+        self._target_face_x: float = 0.5   # Horizontal center
+        self._target_face_y: float = 0.33  # Top third of frame
         
-        # Smoothing state
-        self._smoothed_yaw = 0.0
-        self._smoothed_pitch = 0.0
-        self._smoothing_factor = 0.3  # Low-pass filter coefficient
+        # Smoothing for offset calculation
+        # Higher alpha = faster response, lower = smoother but slower
+        self._offset_smoothing_alpha = 0.15  # Moderate smoothing - responds in ~0.5 sec
+        
+        # Current smoothed offsets (pitch and yaw in radians)
+        self._smoothed_pitch_offset: float = 0.0
+        self._smoothed_yaw_offset: float = 0.0
+        
+        # Gain: how much the head moves per unit of face deviation
+        # These need to be high enough to actually move the head to center the face
+        self._pitch_gain = 0.8  # radians per normalized deviation (~46 deg for full deviation)
+        self._yaw_gain = 1.0    # radians per normalized deviation (~57 deg for full deviation)
+        
+        # Dead zone - ignore small deviations (prevents micro-movements)
+        self._dead_zone_threshold = 0.08  # 8% of frame
+        
+        # Maximum offset limits (prevent extreme head positions)
+        self._max_pitch_offset = 0.5  # ~28 degrees
+        self._max_yaw_offset = 0.7    # ~40 degrees
+        
+        # Movement logging
+        self._movement_log_file = "/tmp/reachy_movements.log"
+        self._init_movement_log()
+        
+        # Antenna wave state - track if we've already waved for this face
+        self._was_face_detected = False
+        self._antenna_wave_triggered = False
+        
+        # Track consecutive errors for timeout protection
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 3
 
     def get_latest_frame(self) -> NDArray[np.uint8] | None:
         """Get the latest frame (thread-safe)."""
@@ -193,14 +224,21 @@ class CameraWorker:
     def enable_face_tracking(self, enable: bool = True):
         """Enable or disable face tracking."""
         self.is_face_tracking_enabled = enable
+        self._log_movement("CONFIG", f"Face tracking {'enabled' if enable else 'disabled'}")
         logger.info(f"Face tracking {'enabled' if enable else 'disabled'}")
         
         if not enable:
-            # Reset offsets when disabling
+            # Reset all state when disabling
             with self.face_tracking_lock:
                 self.face_tracking_offsets = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-                self._smoothed_yaw = 0.0
-                self._smoothed_pitch = 0.0
+            self._was_face_detected = False
+            self._antenna_wave_triggered = False
+            self.last_face_detected_time = None
+            self.last_face_position = None
+            self.last_face_size = None
+            # Reset offset smoothing state
+            self._smoothed_pitch_offset = 0.0
+            self._smoothed_yaw_offset = 0.0
 
     def start(self) -> None:
         """Start the camera worker loop in a thread."""
@@ -218,8 +256,33 @@ class CameraWorker:
             self._face_detector.close()
         logger.debug("Camera worker stopped")
     
+    def _init_movement_log(self):
+        """Initialize the movement log file."""
+        try:
+            with open(self._movement_log_file, 'w') as f:
+                f.write(f"# Reachy Movement Log - Started {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("# Format: timestamp | action | details\n")
+                f.write("-" * 80 + "\n")
+            logger.info(f"Movement log initialized: {self._movement_log_file}")
+        except Exception as e:
+            logger.warning(f"Failed to init movement log: {e}")
+    
+    def _log_movement(self, action: str, details: str):
+        """Log a movement to the movement log file."""
+        try:
+            timestamp = time.strftime('%H:%M:%S')
+            with open(self._movement_log_file, 'a') as f:
+                f.write(f"{timestamp} | {action} | {details}\n")
+        except Exception:
+            pass  # Don't let logging failures affect tracking
+    
     def _update_face_tracking(self, frame: np.ndarray):
-        """Update face tracking offsets based on detected face."""
+        """Update face tracking offsets for smooth 100Hz blending via MovementManager.
+        
+        Calculates pitch/yaw offsets based on face deviation from target position.
+        These offsets are read by the MovementManager at 100Hz and smoothly blended
+        with the primary pose, creating fluid natural movement.
+        """
         if not self.is_face_tracking_enabled:
             return
         
@@ -227,61 +290,105 @@ class CameraWorker:
         current_time = time.time()
         
         if face_result:
-            center_x, center_y, width, height = face_result
+            center_x_norm, center_y_norm, width_norm, height_norm = face_result
             self.last_face_detected_time = current_time
-            self.last_face_position = (center_x, center_y)
-            self.last_face_size = (width, height)
+            self.last_face_position = (center_x_norm, center_y_norm)
+            self.last_face_size = (width_norm, height_norm)
             
-            # Calculate deviation from center (0.5, 0.5)
-            # Positive x deviation = face is on the right = turn right (negative yaw)
-            # Positive y deviation = face is below center = look down (positive pitch)
-            x_deviation = center_x - 0.5
-            y_deviation = center_y - 0.5
+            # Check if this is the first face detection (for antenna wave)
+            if not self._was_face_detected:
+                self._was_face_detected = True
+                self._trigger_antenna_wave()
+                self._log_movement("WAVE", f"First face detected at ({center_x_norm:.2f}, {center_y_norm:.2f})")
+                logger.info("Face detected - triggered antenna wave greeting")
             
-            # Calculate target offsets
-            target_yaw = -x_deviation * self.tracking_gain_yaw
-            target_pitch = y_deviation * self.tracking_gain_pitch
+            # Calculate deviation from target position
+            # Positive x deviation = face is to the RIGHT of target = turn RIGHT (negative yaw)
+            # Positive y deviation = face is BELOW target = look DOWN (positive pitch)
+            deviation_x = center_x_norm - self._target_face_x
+            deviation_y = center_y_norm - self._target_face_y
             
-            # Apply smoothing (low-pass filter)
-            self._smoothed_yaw = (
-                self._smoothing_factor * target_yaw + 
-                (1 - self._smoothing_factor) * self._smoothed_yaw
+            # Apply dead zone - ignore small deviations
+            if abs(deviation_x) < self._dead_zone_threshold:
+                deviation_x = 0.0
+            if abs(deviation_y) < self._dead_zone_threshold:
+                deviation_y = 0.0
+            
+            # Calculate target offsets (with gain and sign correction)
+            # Yaw: negative because looking right requires negative yaw
+            # Pitch: positive because looking down requires positive pitch
+            target_yaw = -deviation_x * self._yaw_gain
+            target_pitch = deviation_y * self._pitch_gain
+            
+            # Clamp to maximum values
+            target_yaw = max(-self._max_yaw_offset, min(self._max_yaw_offset, target_yaw))
+            target_pitch = max(-self._max_pitch_offset, min(self._max_pitch_offset, target_pitch))
+            
+            # Apply heavy smoothing (low-pass filter) for fluid movement
+            # This is where the magic happens - very slow smooth transitions
+            self._smoothed_yaw_offset = (
+                self._offset_smoothing_alpha * target_yaw +
+                (1 - self._offset_smoothing_alpha) * self._smoothed_yaw_offset
             )
-            self._smoothed_pitch = (
-                self._smoothing_factor * target_pitch + 
-                (1 - self._smoothing_factor) * self._smoothed_pitch
+            self._smoothed_pitch_offset = (
+                self._offset_smoothing_alpha * target_pitch +
+                (1 - self._offset_smoothing_alpha) * self._smoothed_pitch_offset
             )
             
-            # Update offsets
+            # Update the face tracking offsets (read by MovementManager at 100Hz)
             with self.face_tracking_lock:
                 self.face_tracking_offsets = [
-                    0.0,  # x
-                    0.0,  # y
-                    0.0,  # z
+                    0.0,  # x translation
+                    0.0,  # y translation
+                    0.0,  # z translation
                     0.0,  # roll
-                    self._smoothed_pitch,  # pitch
-                    self._smoothed_yaw,    # yaw
+                    self._smoothed_pitch_offset,  # pitch
+                    self._smoothed_yaw_offset,    # yaw
                 ]
+            
+            # Log occasionally (not every frame)
+            if not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 2.0:
+                self._log_movement("OFFSET", f"yaw={self._smoothed_yaw_offset:.3f}, pitch={self._smoothed_pitch_offset:.3f}, dev=({deviation_x:.2f},{deviation_y:.2f})")
+                self._last_log_time = current_time
         
         elif self.last_face_detected_time:
-            # Face lost - gradually return to neutral
+            # Face lost - gradually return offsets to zero
             time_since_face = current_time - self.last_face_detected_time
             
             if time_since_face > self.face_lost_delay:
-                # Smoothly return to neutral
-                decay = 0.95
-                self._smoothed_yaw *= decay
-                self._smoothed_pitch *= decay
+                # Reset antenna wave state
+                self._was_face_detected = False
                 
+                # Decay offsets toward zero (smooth return to neutral)
+                decay = 0.95  # Slow decay for smooth return
+                self._smoothed_yaw_offset *= decay
+                self._smoothed_pitch_offset *= decay
+                
+                # Update offsets
                 with self.face_tracking_lock:
                     self.face_tracking_offsets = [
                         0.0, 0.0, 0.0,
-                        0.0, self._smoothed_pitch, self._smoothed_yaw,
+                        0.0, self._smoothed_pitch_offset, self._smoothed_yaw_offset,
                     ]
                 
-                # Reset if very close to neutral
-                if abs(self._smoothed_yaw) < 0.001 and abs(self._smoothed_pitch) < 0.001:
+                # Reset when very close to zero
+                if abs(self._smoothed_yaw_offset) < 0.001 and abs(self._smoothed_pitch_offset) < 0.001:
                     self.last_face_detected_time = None
+                    self._log_movement("NEUTRAL", f"Returned to neutral after face lost")
+    
+    def _trigger_antenna_wave(self):
+        """Trigger an antenna wave greeting when a face is first detected."""
+        try:
+            from .reachy_service import ReachyService
+            from .dance_emotion_moves import AntennaWaveMove
+            
+            service = ReachyService.get_instance()
+            if service and service.motion_manager:
+                wave_move = AntennaWaveMove(duration=0.8)
+                service.motion_manager.queue_move(wave_move)
+                logger.info("Queued antenna wave greeting")
+        except Exception as e:
+            logger.warning(f"Failed to trigger antenna wave: {e}")
 
     def working_loop(self) -> None:
         logger.debug("Starting camera working loop")
