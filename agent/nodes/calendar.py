@@ -69,9 +69,10 @@ AVAILABLE CALENDAR TOOLS (use EXACT names with HYPHENS):
    {{
      "calendarId": "{calendar_id}",
      "summary": "Event title",
-     "start": {{"dateTime": "2024-01-15T14:00:00", "timeZone": "America/Los_Angeles"}},
-     "end": {{"dateTime": "2024-01-15T15:00:00", "timeZone": "America/Los_Angeles"}}
+     "start": "2024-01-15T14:00:00-06:00",
+     "end": "2024-01-15T15:00:00-06:00"
    }}
+   Note: start and end MUST be ISO 8601 date strings (NOT objects)
 
 6. "update-event" - Update an existing event.
    Required: calendarId, eventId, plus fields to update.
