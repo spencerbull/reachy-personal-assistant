@@ -42,14 +42,22 @@ AVAILABLE CALENDAR TOOLS (use EXACT names with HYPHENS):
 
 1. "get-current-time" - Get the current date/time. Call this first if you need the current time.
 
-2. "list-events" - List upcoming calendar events.
-   REQUIRED parameters (use these exact values):
+2. "list-events" - List calendar events in a time range.
+   REQUIRED parameters:
    {{
      "calendarId": "{calendar_id}",
-     "timeMin": "{today_iso}",
-     "timeMax": "{two_weeks_iso}",
+     "timeMin": "<start of range in ISO format>",
+     "timeMax": "<end of range in ISO format>",
      "maxResults": 10
    }}
+   
+   CRITICAL: timeMin and timeMax must be DIFFERENT values forming a range!
+   - For "what's on my calendar today": timeMin=start of day, timeMax=end of day
+   - For "at 2pm": timeMin=2pm, timeMax=3pm (or end of day)
+   - For "tomorrow": timeMin=tomorrow 00:00, timeMax=tomorrow 23:59
+   - For general queries: timeMin={today_iso}, timeMax={two_weeks_iso}
+   
+   NEVER set timeMin and timeMax to the same value - you'll get no results!
 
 3. "list-calendars" - List all available calendars. No parameters required.
 
@@ -71,7 +79,10 @@ AVAILABLE CALENDAR TOOLS (use EXACT names with HYPHENS):
 IMPORTANT RULES:
 - Tool names use HYPHENS: "list-events" NOT "list_events"
 - Always use calendarId: "{calendar_id}"
-- For list-events, always include timeMin, timeMax, and maxResults
+- For list-events: timeMin and timeMax MUST form a range (never the same value!)
+  * "at 2pm" → timeMin=14:00, timeMax=15:00 (1 hour window)
+  * "today" → timeMin=00:00, timeMax=23:59
+  * "this week" → timeMin=today, timeMax=7 days from now
 - After getting results, summarize them naturally in speech
 - Say things like "You have a meeting at 2pm with John" - not raw data
 - If no events found, say "Your calendar is clear for that time"
