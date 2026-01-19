@@ -118,18 +118,33 @@ class MCPToolLoader:
         # Load each server individually so we can filter per-server
         for config in enabled_servers:
             try:
-                # Build single-server config
-                server_config = {
-                    "transport": "stdio",
-                    "command": config.command[0],
-                    "args": config.command[1:] if len(config.command) > 1 else [],
-                }
-                if config.env:
-                    server_config["env"] = config.env
+                # Check if this is an SSE transport (remote server)
+                is_sse = len(config.command) >= 2 and config.command[0] == "sse"
+                
+                if is_sse:
+                    # SSE transport for remote servers (e.g., Windows filesystem)
+                    sse_url = config.command[1]
+                    if not sse_url:
+                        logger.warning(f"SSE URL not configured for server '{config.name}', skipping")
+                        continue
+                    
+                    server_config = {
+                        "transport": "sse",
+                        "url": sse_url,
+                    }
+                    logger.info(f"Loading tools from SSE server: {config.name} at {sse_url}")
+                else:
+                    # STDIO transport for local servers
+                    server_config = {
+                        "transport": "stdio",
+                        "command": config.command[0],
+                        "args": config.command[1:] if len(config.command) > 1 else [],
+                    }
+                    if config.env:
+                        server_config["env"] = config.env
+                    logger.info(f"Loading tools from STDIO server: {config.name}")
                 
                 server_params = {config.name: server_config}
-                
-                logger.info(f"Loading tools from server: {config.name}")
                 
                 # Create client and get tools for this server
                 client = MultiServerMCPClient(server_params)
@@ -399,6 +414,104 @@ def is_gmail_configured() -> bool:
     return False
 
 
+def create_windows_fs_mcp_config(
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    enabled: bool = True
+) -> MCPServerConfig:
+    """
+    Create configuration for Windows Filesystem MCP server.
+    
+    This server provides file system operations for organizing files on a 
+    Windows machine. It runs as a standalone server accessible via SSE transport.
+    
+    Tools provided:
+    - list_directory: List files/folders with metadata and previews
+    - read_file_content: Read file content for semantic analysis
+    - get_file_info: Get detailed file metadata
+    - move_file: Move files to new locations
+    - rename_file: Rename files
+    - create_directory: Create new directories
+    - delete_file: Delete files (with safety confirmation)
+    
+    Prerequisites:
+    1. Run the MCP server on the Windows machine:
+       - Copy mcp_servers/windows_filesystem/ to Windows PC
+       - Run start_server.bat
+    2. Ensure network connectivity (Tailscale, VPN, or direct)
+    3. Set environment variables:
+       - WINDOWS_FS_MCP_HOST: IP address or hostname of Windows machine
+       - WINDOWS_FS_MCP_PORT: Port the server is running on (default: 8765)
+    
+    Environment Variables:
+        WINDOWS_FS_MCP_HOST: Host/IP of Windows machine running the server
+        WINDOWS_FS_MCP_PORT: Port number (default: 8765)
+        WINDOWS_FS_MCP_ENABLED: Enable/disable the server
+        WINDOWS_FS_ENABLED_TOOLS: Comma-separated list of tools to enable
+            Example: WINDOWS_FS_ENABLED_TOOLS=list_directory,move_file,create_directory
+    
+    Args:
+        host: Hostname or IP of Windows machine (uses env var if not provided)
+        port: Port number (uses env var or 8765 if not provided)
+        enabled: Whether the server is enabled
+        
+    Returns:
+        MCP server configuration for SSE transport
+    """
+    import os
+    
+    # Get host and port from parameters or environment
+    server_host = host or os.getenv("WINDOWS_FS_MCP_HOST", "")
+    server_port = port or int(os.getenv("WINDOWS_FS_MCP_PORT", "8765"))
+    
+    if not server_host:
+        logger.warning("Windows FS MCP: No host configured. Set WINDOWS_FS_MCP_HOST environment variable.")
+        enabled = False
+    
+    # Parse enabled tools from environment
+    enabled_tools = None
+    tools_env = os.getenv("WINDOWS_FS_ENABLED_TOOLS")
+    if tools_env:
+        parsed_tools = [tool.strip() for tool in tools_env.split(",") if tool.strip()]
+        if parsed_tools:
+            enabled_tools = parsed_tools
+            logger.info(f"Windows FS MCP tools filtered to: {enabled_tools}")
+    
+    # Build the SSE URL
+    sse_url = f"http://{server_host}:{server_port}/sse" if server_host else ""
+    
+    return MCPServerConfig(
+        name="windows_filesystem",
+        # For SSE transport, we use a special command format
+        # The loader will detect this and use SSE instead of stdio
+        command=["sse", sse_url],
+        env={
+            "WINDOWS_FS_MCP_HOST": server_host,
+            "WINDOWS_FS_MCP_PORT": str(server_port),
+        },
+        description="Windows filesystem operations for file organization and management",
+        enabled=enabled and bool(server_host),
+        enabled_tools=enabled_tools,
+    )
+
+
+def is_windows_fs_configured() -> bool:
+    """
+    Check if Windows Filesystem MCP server is configured.
+    
+    Returns:
+        True if host is configured via environment variable
+    """
+    import os
+    
+    host = os.getenv("WINDOWS_FS_MCP_HOST", "")
+    if host:
+        logger.info(f"Windows FS MCP configured for host: {host}")
+        return True
+    
+    return False
+
+
 # Directory for custom MCP servers
 MCP_SERVERS_DIR = "mcp_servers"
 
@@ -432,5 +545,14 @@ def get_all_mcp_configs() -> list[MCPServerConfig]:
         # Allow enabling via environment variable even if not authenticated yet
         configs.append(create_gmail_mcp_config(enabled=True))
         logger.warning("Gmail MCP enabled via env var but may not be authenticated")
+    
+    # Add Windows Filesystem MCP if configured
+    if is_windows_fs_configured():
+        configs.append(create_windows_fs_mcp_config(enabled=True))
+        logger.info("Windows Filesystem MCP server enabled")
+    elif os.getenv("WINDOWS_FS_MCP_ENABLED", "").lower() == "true":
+        # Allow enabling via environment variable
+        configs.append(create_windows_fs_mcp_config(enabled=True))
+        logger.warning("Windows FS MCP enabled via env var but host may not be configured")
     
     return configs

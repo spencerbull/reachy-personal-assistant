@@ -19,7 +19,7 @@ from agent.state import ReachyAgentState, StateUpdate
 from agent.config import AgentConfig
 
 # Route types
-RouteType = Literal["conversation", "vision", "tools", "image_gen", "calendar", "email"]
+RouteType = Literal["conversation", "vision", "tools", "image_gen", "calendar", "email", "file_manager"]
 
 ROUTER_SYSTEM_PROMPT = """You are a router that classifies user intents for a robot assistant named Reachy.
 
@@ -44,14 +44,20 @@ Analyze the user's message and determine the best route:
 5. "email" - Any request about email, inbox, sending/reading messages
    Examples: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
 
+6. "file_manager" - Any request about organizing, moving, renaming, or managing files on a computer
+   Examples: "Organize my desktop", "Clean up my downloads folder", "Move files into folders", 
+   "What files are on my desktop?", "Help me organize my documents", "Sort my files by type",
+   "Rename these files", "Create a folder structure", "List files in my downloads"
+
 IMPORTANT: 
+- File organization/management goes to "file_manager"
 - Calendar/schedule questions go to "calendar"
 - Email/inbox questions go to "email"
 - Physical robot actions go to "tools"
 - Visual questions go to "vision"
 
 Respond with ONLY a JSON object in this exact format:
-{"route": "conversation" | "vision" | "tools" | "calendar" | "email", "reason": "brief explanation"}"""
+{"route": "conversation" | "vision" | "tools" | "calendar" | "email" | "file_manager", "reason": "brief explanation"}"""
 
 
 def create_router_llm(config: AgentConfig) -> ChatOpenAI:
@@ -92,7 +98,7 @@ def parse_router_response(response: str) -> tuple[RouteType, str]:
             reason = data.get("reason", "")
             
             # Validate route
-            valid_routes = ("conversation", "vision", "tools", "image_gen", "calendar", "email")
+            valid_routes = ("conversation", "vision", "tools", "image_gen", "calendar", "email", "file_manager")
             if route not in valid_routes:
                 logger.warning(f"Invalid route '{route}', defaulting to conversation")
                 route = "conversation"
@@ -197,6 +203,34 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
         logger.info(f"Router: Fast path -> email (keyword match)")
         return {"route": "email"}
     
+    # File manager keywords - file organization, folder management
+    file_manager_keywords = [
+        # Organization requests
+        "organize my", "organize the", "organize files", "organize folder",
+        "clean up my", "clean up the", "cleanup my", "cleanup the",
+        "sort my files", "sort the files", "sort files",
+        "tidy up", "declutter",
+        # File operations
+        "move files", "move the files", "move my files",
+        "rename files", "rename the files", "rename my files",
+        "create folder", "create a folder", "make folder", "make a folder",
+        "new folder", "create directory",
+        # Listing/browsing
+        "list files", "show files", "what files", "files on my",
+        "files in my", "what's on my desktop", "what's in my",
+        "show my desktop", "show my downloads", "show my documents",
+        # Desktop/Downloads/Documents specific
+        "my desktop", "my downloads", "my documents",
+        "desktop folder", "downloads folder", "documents folder",
+        # File management
+        "file management", "manage files", "manage my files",
+        "folder structure", "directory structure",
+        "categorize files", "group files", "sort by type",
+    ]
+    if any(kw in lower_msg for kw in file_manager_keywords):
+        logger.info(f"Router: Fast path -> file_manager (keyword match)")
+        return {"route": "file_manager"}
+    
     # Tool keywords - physical actions and memory operations (no calendar/email)
     tool_keywords = [
         # Head movement
@@ -279,5 +313,7 @@ def get_next_node(state: ReachyAgentState) -> str:
         return "calendar"
     elif route == "email":
         return "email"
+    elif route == "file_manager":
+        return "file_manager"
     else:
         return "conversation"

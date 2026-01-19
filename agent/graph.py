@@ -22,6 +22,7 @@ from agent.nodes.tools import tools_node
 from agent.nodes.image_gen import image_gen_node
 from agent.nodes.calendar import calendar_node
 from agent.nodes.email import email_node
+from agent.nodes.file_manager import file_manager_node
 from agent.tools.reachy_tools import get_all_reachy_tools
 from agent.tools.memory_tools import get_all_memory_tools
 from agent.tools.comfyui_tools import get_all_comfyui_tools
@@ -74,6 +75,9 @@ def create_graph(
     async def email_with_config(state: ReachyAgentState) -> dict:
         return await email_node(state, config, all_tools)
     
+    async def file_manager_with_config(state: ReachyAgentState) -> dict:
+        return await file_manager_node(state, config, all_tools)
+    
     # Build the graph
     builder = StateGraph(ReachyAgentState)
     
@@ -85,6 +89,7 @@ def create_graph(
     builder.add_node("image_gen", image_gen_with_config)
     builder.add_node("calendar", calendar_with_config)
     builder.add_node("email", email_with_config)
+    builder.add_node("file_manager", file_manager_with_config)
     
     # Add edges
     # Start -> Router
@@ -101,6 +106,7 @@ def create_graph(
             "image_gen": "image_gen",
             "calendar": "calendar",
             "email": "email",
+            "file_manager": "file_manager",
         }
     )
     
@@ -111,6 +117,7 @@ def create_graph(
     builder.add_edge("image_gen", END)
     builder.add_edge("calendar", END)
     builder.add_edge("email", END)
+    builder.add_edge("file_manager", END)
     
     # Compile the graph
     # Note: When running via LangGraph CLI (langgraph dev), persistence is 
