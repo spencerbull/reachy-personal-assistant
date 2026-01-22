@@ -52,7 +52,7 @@ async def generate_detailed_prompt(
     Use LLM to generate a detailed, professional prompt for image generation.
     
     Args:
-        image_description: Description of the source image
+        image_description: Description of the source image (content-focused)
         user_style_request: User's requested style/transformation
         config: Agent configuration
         
@@ -63,7 +63,7 @@ async def generate_detailed_prompt(
         llm = create_main_llm(config)
         
         system_prompt = """You are an expert prompt engineer for image generation AI systems.
-Your task is to create detailed, professional prompts that will produce high-quality images.
+Your task is to create, professional prompts that will produce high-quality images.
 
 Given an image description and a user's style request, generate a comprehensive prompt that:
 1. Preserves the key elements and composition from the original image
@@ -73,11 +73,11 @@ Given an image description and a user's style request, generate a comprehensive 
 
 Output ONLY the prompt text, nothing else. Make it 2-4 sentences, rich with descriptive details."""
 
-        user_prompt = f"""Original image: {image_description}
+        user_prompt = f"""This is a general description of the image: {image_description}
 
-User's style request: {user_style_request}
+Style: {user_style_request}
 
-Generate a detailed image generation prompt that transforms the original into the requested style:"""
+Prompt must start with: Take the image or sketch and create a {user_style_request} render of the image or drawing as you were an artist or photographer, phototography, 3D models, ray tracing, and realism. <add prompt refinement here> """
 
         response = await llm.ainvoke([
             SystemMessage(content=system_prompt),
@@ -95,13 +95,13 @@ Generate a detailed image generation prompt that transforms the original into th
 
 
 async def describe_image(image_b64: str, config: AgentConfig) -> str:
-    """Use vision LLM to describe an image."""
+    """Use vision LLM to describe an image, focusing on design content for sketches."""
     try:
         llm = create_vision_llm(config)
         
         # Build vision message
         content = [
-            {"type": "text", "text": "Describe this image briefly in 1-2 sentences. Focus on the main subject and composition."},
+            {"type": "text", "text": description_prompt},
             {"type": "image_url", "image_url": {"url": image_b64}},
         ]
         
