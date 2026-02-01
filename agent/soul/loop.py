@@ -34,6 +34,7 @@ from agent.soul.events import (
 from agent.soul.emotion_inference import EmotionInference, EmotionInferenceResult
 from agent.soul.movement_blender import MovementBlender, Pose
 from agent.soul.idle_generator import IdleGenerator
+from agent.soul.personality import Personality, get_personality
 from agent.memory.emotional import EmotionalState
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ class SoulLoop:
         config: SoulConfig,
         reachy_service: Optional[Any] = None,
         on_movement: Optional[Callable[[dict], None]] = None,
+        personality: Optional[Personality] = None,
     ):
         """
         Initialize the soul loop.
@@ -84,13 +86,27 @@ class SoulLoop:
             config: Soul configuration
             reachy_service: ReachyService instance for sending commands
             on_movement: Callback for movement updates (receives pose dict)
+            personality: Optional personality to use (loads from file if not provided)
         """
         self.config = config
         self._reachy_service = reachy_service
         self._on_movement = on_movement
         
-        # Subsystems
-        self._emotion_inference = EmotionInference(config)
+        # Load personality
+        if personality is not None:
+            self._personality = personality
+        else:
+            self._personality = Personality.load(config.personality.soul_file_path)
+        
+        if self._personality.is_loaded():
+            logger.info(f"Loaded personality: {self._personality.name}")
+            # Apply embodiment principles to config
+            self._apply_personality_to_config()
+        else:
+            logger.warning("No personality loaded, using defaults")
+        
+        # Subsystems (pass personality to emotion inference)
+        self._emotion_inference = EmotionInference(config, self._personality)
         self._movement_blender = MovementBlender(config)
         self._idle_generator = IdleGenerator(config)
         
@@ -105,8 +121,40 @@ class SoulLoop:
         # Time tracking
         self._loop_start_time = 0.0
         self._last_emotion_inference_time = 0.0
+        self._last_personality_reload = 0.0
         
         logger.info("SoulLoop initialized")
+    
+    def _apply_personality_to_config(self):
+        """Apply personality embodiment principles to config."""
+        if not self._personality.is_loaded():
+            return
+        
+        idle_config = self._personality.get_idle_behavior_config()
+        
+        # Override config with personality preferences
+        if "breathing_enabled" in idle_config:
+            self.config.idle_breathing_enabled = idle_config["breathing_enabled"]
+        if "micro_movements_enabled" in idle_config:
+            self.config.idle_micro_movements_enabled = idle_config["micro_movements_enabled"]
+        if "scanning_enabled" in idle_config:
+            self.config.idle_scanning_enabled = idle_config["scanning_enabled"]
+        
+        logger.debug(f"Applied personality idle config: {idle_config}")
+    
+    @property
+    def personality(self) -> Optional[Personality]:
+        """Get the loaded personality."""
+        return self._personality
+    
+    def reload_personality(self) -> bool:
+        """Reload personality from file."""
+        if self._personality.reload():
+            self._apply_personality_to_config()
+            self._emotion_inference.set_personality(self._personality)
+            logger.info("Personality reloaded successfully")
+            return True
+        return False
     
     async def start(self):
         """Start the soul loop as a background task."""
@@ -154,6 +202,10 @@ class SoulLoop:
             loop_start = time.time()
             
             try:
+                # Check for personality reload if auto-reload enabled
+                if self.config.personality.auto_reload:
+                    await self._check_personality_reload()
+                
                 # Process any pending events
                 await self._process_events()
                 
@@ -204,6 +256,27 @@ class SoulLoop:
                 break  # Stop event was set
             except asyncio.TimeoutError:
                 pass  # Normal loop continuation
+    
+    async def _check_personality_reload(self):
+        """Check if personality file needs reloading."""
+        now = time.time()
+        if now - self._last_personality_reload < self.config.personality.reload_interval_s:
+            return
+        
+        self._last_personality_reload = now
+        
+        # Check file modification time
+        import os
+        try:
+            mtime = os.path.getmtime(self._personality.file_path)
+            if not hasattr(self, '_personality_mtime'):
+                self._personality_mtime = mtime
+            elif mtime > self._personality_mtime:
+                logger.info("Personality file changed, reloading...")
+                self.reload_personality()
+                self._personality_mtime = mtime
+        except OSError:
+            pass
     
     async def _process_events(self):
         """Process all pending events from the queue."""

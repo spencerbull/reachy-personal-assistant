@@ -9,6 +9,17 @@ from typing import Optional
 
 
 @dataclass
+class PersonalityConfig:
+    """Configuration for personality loading."""
+    
+    soul_file_path: str = "REACHY_SOUL.md"
+    auto_reload: bool = False  # Reload personality on file change
+    reload_interval_s: float = 60.0  # How often to check for changes
+    use_personality_expressions: bool = True  # Use SOUL.md physical expressions
+    use_personality_prompts: bool = True  # Use SOUL.md for system prompts
+
+
+@dataclass
 class SoulConfig:
     """
     Configuration for the Reachy Soul System.
@@ -90,6 +101,9 @@ class SoulConfig:
     face_tracking_on_attention: bool = True
     antenna_wave_on_face_detected: bool = True
     
+    # Personality
+    personality: PersonalityConfig = field(default_factory=PersonalityConfig)
+    
     # Debug
     debug_logging: bool = False
     
@@ -97,6 +111,13 @@ class SoulConfig:
     def from_env(cls) -> "SoulConfig":
         """Create config from environment variables."""
         import os
+        
+        personality = PersonalityConfig(
+            soul_file_path=os.getenv("SOUL_FILE_PATH", "REACHY_SOUL.md"),
+            auto_reload=os.getenv("SOUL_AUTO_RELOAD", "false").lower() == "true",
+            use_personality_expressions=os.getenv("SOUL_USE_PERSONALITY_EXPRESSIONS", "true").lower() == "true",
+            use_personality_prompts=os.getenv("SOUL_USE_PERSONALITY_PROMPTS", "true").lower() == "true",
+        )
         
         return cls(
             poll_interval_ms=int(os.getenv("SOUL_POLL_INTERVAL_MS", "200")),
@@ -106,6 +127,7 @@ class SoulConfig:
             idle_breathing_enabled=os.getenv("SOUL_IDLE_BREATHING", "true").lower() == "true",
             idle_micro_movements_enabled=os.getenv("SOUL_IDLE_MICRO_MOVEMENTS", "true").lower() == "true",
             idle_scanning_enabled=os.getenv("SOUL_IDLE_SCANNING", "true").lower() == "true",
+            personality=personality,
             debug_logging=os.getenv("SOUL_DEBUG", "false").lower() == "true",
         )
     
@@ -120,4 +142,10 @@ class SoulConfig:
             "idle_micro_movements_enabled": self.idle_micro_movements_enabled,
             "idle_scanning_enabled": self.idle_scanning_enabled,
             "movement_blend_duration_s": self.movement_blend_duration_s,
+            "personality": {
+                "soul_file_path": self.personality.soul_file_path,
+                "auto_reload": self.personality.auto_reload,
+                "use_personality_expressions": self.personality.use_personality_expressions,
+                "use_personality_prompts": self.personality.use_personality_prompts,
+            },
         }

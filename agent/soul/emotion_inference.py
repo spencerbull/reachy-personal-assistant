@@ -10,12 +10,15 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Optional, Literal, TYPE_CHECKING
 
 import aiohttp
 
 from agent.soul.config import SoulConfig
 from agent.memory.emotional import EmotionalState, EMOTION_EXPRESSIONS
+
+if TYPE_CHECKING:
+    from agent.soul.personality import Personality
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,8 @@ class EmotionInference:
     Reachy should express. Uses small, focused prompts for fast inference.
     """
     
-    # System prompt for emotion inference (kept small for speed)
-    SYSTEM_PROMPT = """You analyze conversation context to determine emotional state for a robot assistant.
+    # Base system prompt for emotion inference (kept small for speed)
+    BASE_SYSTEM_PROMPT = """You analyze conversation context to determine emotional state for a robot assistant.
 
 Respond with JSON only, no explanation:
 {"emotion": "...", "intensity": 0.0-1.0, "movement_hint": "..."}
@@ -61,11 +64,15 @@ Guidelines:
 
 movement_hint is optional - use for specific actions like "nod", "tilt_head", "lean_forward\""""
 
-    def __init__(self, config: SoulConfig):
+    def __init__(self, config: SoulConfig, personality: Optional["Personality"] = None):
         self.config = config
+        self._personality = personality
         self._last_inference_time: float = 0
         self._current_emotion = EmotionInferenceResult(emotion="neutral", intensity=0.5)
         self._session: Optional[aiohttp.ClientSession] = None
+        
+        # Build system prompt with personality context
+        self._system_prompt = self._build_system_prompt()
         
         # Context tracking
         self._last_user_message: str = ""
@@ -73,6 +80,22 @@ movement_hint is optional - use for specific actions like "nod", "tilt_head", "l
         self._user_state: str = "idle"  # idle, speaking, waiting
         self._time_since_interaction_ms: int = 0
         self._last_interaction_time: float = time.time()
+    
+    def set_personality(self, personality: "Personality"):
+        """Update the personality and rebuild prompts."""
+        self._personality = personality
+        self._system_prompt = self._build_system_prompt()
+    
+    def _build_system_prompt(self) -> str:
+        """Build system prompt, optionally including personality context."""
+        prompt = self.BASE_SYSTEM_PROMPT
+        
+        if self._personality and self.config.personality.use_personality_prompts:
+            personality_context = self._personality.generate_emotion_inference_context()
+            if personality_context:
+                prompt = f"{prompt}\n\n{personality_context}"
+        
+        return prompt
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
@@ -164,7 +187,7 @@ What should the emotional state be now?"""
         payload = {
             "model": self.config.soul_model_name,
             "messages": [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.config.soul_model_temperature,
