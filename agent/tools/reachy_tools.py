@@ -1,9 +1,13 @@
 """
 Reachy robot control tools.
 
-These tools allow the LLM to control Reachy's movement, expressions, and tracking.
+These tools allow the LLM to control Reachy's movement and tracking.
 They return command tokens that are parsed by the Pipecat pipeline to execute
 actual robot movements.
+
+NOTE: Emotion expression is handled automatically by the Soul System 
+(agent/soul/), not through explicit tool calls. The soul loop infers
+emotional state from conversation context and expresses it naturally.
 """
 
 from typing import Literal, Optional
@@ -17,8 +21,9 @@ HeadDirection = Literal["left", "right", "up", "down", "front"]
 # Valid directions for body turn
 BodyDirection = Literal["left", "right"]
 
-# Valid emotions
-EmotionType = Literal["happy", "sad", "excited", "curious", "thinking", "neutral", "attentive", "playful"]
+# NOTE: Emotions are now handled by the Soul System (agent/soul/)
+# The soul loop automatically infers and expresses emotions based on
+# conversation context - no explicit tool call needed.
 
 # Valid dance moves from reachy_mini_dances_library
 # See: https://github.com/pollen-robotics/reachy_mini_dances_library
@@ -189,47 +194,11 @@ def enable_face_tracking_tool(enable: bool) -> str:
         return "I've stopped tracking your face. [CMD_FACE_TRACK_OFF]"
 
 
-@tool
-def express_emotion_tool(emotion: EmotionType) -> str:
-    """
-    Express an emotion through Reachy's movements and antenna positions.
-    
-    Use this to make Reachy more expressive and personable. Different
-    emotions trigger different movement patterns:
-    - happy: Antenna wiggle, slight bounce
-    - sad: Drooping antennas, slight head down
-    - excited: Fast antenna movement, bouncy
-    - curious: Head tilt, raised antennas
-    - thinking: Look up/away, antenna pause
-    - neutral: Return to default position
-    - attentive: Forward lean, steady antennas
-    - playful: Quick movements, antenna dance
-    
-    Args:
-        emotion: The emotion to express
-        
-    Returns:
-        Confirmation message with command token for the robot controller
-    """
-    emotion = emotion.lower()
-    
-    emotion_descriptions = {
-        "happy": "I'm feeling happy! [CMD_EMOTION_HAPPY]",
-        "sad": "I'm feeling a bit down. [CMD_EMOTION_SAD]",
-        "excited": "I'm so excited! [CMD_EMOTION_EXCITED]",
-        "curious": "Hmm, that's interesting! [CMD_EMOTION_CURIOUS]",
-        "thinking": "Let me think about that. [CMD_EMOTION_THINKING]",
-        "neutral": "I'm back to my normal state. [CMD_EMOTION_NEUTRAL]",
-        "attentive": "I'm listening carefully. [CMD_EMOTION_ATTENTIVE]",
-        "playful": "Time to have some fun! [CMD_EMOTION_PLAYFUL]",
-    }
-    
-    if emotion in emotion_descriptions:
-        logger.info(f"express_emotion_tool: Expressing {emotion}")
-        return emotion_descriptions[emotion]
-    else:
-        logger.warning(f"express_emotion_tool: Unknown emotion '{emotion}'")
-        return f"I don't know how to express {emotion}."
+# NOTE: express_emotion_tool has been removed!
+# Emotions are now handled automatically by the Soul System (agent/soul/).
+# The soul loop infers emotional state from conversation context and
+# expresses it naturally through movement, without explicit tool calls.
+# This makes Reachy's expressions more natural and contextually appropriate.
 
 
 @tool
@@ -370,12 +339,17 @@ def nod_tool(affirmative: bool = True) -> str:
 
 
 def get_all_reachy_tools():
-    """Get all Reachy control tools as a list."""
+    """
+    Get all Reachy control tools as a list.
+    
+    NOTE: express_emotion_tool was removed - emotions are now handled
+    automatically by the Soul System (agent/soul/).
+    """
     return [
         look_at_tool,
         turn_body_tool,
         enable_face_tracking_tool,
-        express_emotion_tool,
+        # express_emotion_tool - REMOVED: handled by Soul System
         dance_tool,
         scan_room_tool,
         get_current_pose_tool,
