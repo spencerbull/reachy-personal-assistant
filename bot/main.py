@@ -401,6 +401,12 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             if LLM_BACKEND == "langgraph":
                 logger.info("Initializing MCP tools...")
                 await llm.initialize_mcp()
+                
+                # Start Soul System for continuous embodiment (emotion, movement, idle behaviors)
+                logger.info("Starting Soul System...")
+                reachy_service = ReachyService.get_instance()
+                llm.set_reachy_service(reachy_service)
+                await llm.start_soul()
 
             # Kick off the conversation.
             messages.append(
@@ -418,6 +424,11 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected")
             await camera_processor.stop()
+            
+            # Stop Soul System
+            if LLM_BACKEND == "langgraph":
+                logger.info("Stopping Soul System...")
+                await llm.stop_soul()
             
             # Close MCP connections if using LangGraph
             if LLM_BACKEND == "langgraph" and hasattr(llm, '_mcp_loader') and llm._mcp_loader:
