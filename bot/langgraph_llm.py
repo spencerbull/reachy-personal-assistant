@@ -4,6 +4,11 @@ LangGraph LLM Service for Pipecat integration.
 This module provides a Pipecat-compatible LLM service that uses the LangGraph
 agent for processing messages, enabling stateful conversations with memory,
 tool use, and vision understanding.
+
+Also integrates with the Soul System (agent/soul/) for continuous embodiment:
+- Emotion inference from conversation context
+- Smooth movement blending
+- Idle behaviors (breathing, micro-movements)
 """
 
 import asyncio
@@ -45,6 +50,15 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
+# Soul System integration for continuous embodiment
+try:
+    from agent.soul import SoulLoop, SoulConfig
+    SOUL_AVAILABLE = True
+except ImportError:
+    SOUL_AVAILABLE = False
+    SoulLoop = None
+    SoulConfig = None
+
 
 class LangGraphLLMService(LLMService):
     """
@@ -56,6 +70,7 @@ class LangGraphLLMService(LLMService):
     - Image capture and inclusion
     - Stateful conversation via thread IDs
     - Response streaming to TTS
+    - Soul System for continuous embodiment (emotion, movement, idle behaviors)
     """
 
     def __init__(
@@ -65,6 +80,9 @@ class LangGraphLLMService(LLMService):
         image_quality: int = 60,
         enable_mcp: bool = True,
         mcp_tools: Optional[list] = None,
+        enable_soul: bool = True,
+        soul_config: Optional["SoulConfig"] = None,
+        reachy_service: Optional[object] = None,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -98,6 +116,21 @@ class LangGraphLLMService(LLMService):
         self._transport = None  # Transport for sending chat messages directly
         self._rtvi_processor = None  # RTVI processor for sending server messages
         
+        # Soul System integration for continuous embodiment
+        self._enable_soul = enable_soul and SOUL_AVAILABLE
+        self._soul: Optional["SoulLoop"] = None
+        self._reachy_service = reachy_service
+        
+        if self._enable_soul and SOUL_AVAILABLE:
+            soul_cfg = soul_config or SoulConfig.from_env()
+            self._soul = SoulLoop(
+                config=soul_cfg,
+                reachy_service=reachy_service,
+            )
+            logger.info("Soul System enabled for continuous embodiment")
+        elif enable_soul and not SOUL_AVAILABLE:
+            logger.warning("Soul System requested but not available (import failed)")
+        
         # Log MCP status
         if is_gmail_configured():
             logger.info("Gmail MCP is configured - tools will be loaded on first use")
@@ -106,6 +139,39 @@ class LangGraphLLMService(LLMService):
         
         logger.info(f"LangGraphLLMService initialized with {len(self._graph.nodes)} nodes")
     
+    async def start_soul(self):
+        """
+        Start the Soul System embodiment loop.
+        
+        Call this when the pipeline starts to enable continuous presence.
+        The soul loop runs in the background, managing:
+        - Emotion inference from conversation
+        - Movement blending for smooth transitions
+        - Idle behaviors (breathing, micro-movements)
+        """
+        if self._soul and not self._soul.is_running:
+            await self._soul.start()
+            logger.info("Soul System started")
+    
+    async def stop_soul(self):
+        """Stop the Soul System embodiment loop."""
+        if self._soul and self._soul.is_running:
+            await self._soul.stop()
+            logger.info("Soul System stopped")
+    
+    def set_reachy_service(self, service):
+        """Set or update the Reachy service for soul movement commands."""
+        self._reachy_service = service
+        if self._soul:
+            self._soul._reachy_service = service
+        logger.info("Reachy service connected to Soul System")
+    
+    def get_soul_status(self) -> Optional[dict]:
+        """Get the current soul loop status for debugging."""
+        if self._soul:
+            return self._soul.get_status()
+        return None
+
     async def initialize_mcp(self):
         """Load MCP tools asynchronously. Call this before first use."""
         if self._mcp_initialized or not self._enable_mcp:
@@ -301,6 +367,14 @@ class LangGraphLLMService(LLMService):
             # Don't pass UserImageRawFrame downstream - it's for LLM vision only
             return
         
+        # Feed conversation events to Soul System
+        if isinstance(frame, UserSpeakingFrame) and self._soul:
+            self._soul.on_user_speaking()
+        
+        if isinstance(frame, BotSpeakingFrame) and self._soul:
+            # Bot is speaking - soul will show appropriate expression
+            pass
+        
         # Log LLMRunFrame specifically - normally this is consumed by the upstream aggregator
         # but if it reaches us, we should pass it through
         if isinstance(frame, LLMRunFrame):
@@ -384,6 +458,10 @@ class LangGraphLLMService(LLMService):
             
             logger.info(f"Processing message: {user_message[:100]}...")
             
+            # Feed user message to Soul System
+            if self._soul:
+                self._soul.on_user_message(user_message)
+            
             # Always attach the latest camera image for each request
             # This ensures vision requests always have the current view
             image_data = None
@@ -441,6 +519,10 @@ class LangGraphLLMService(LLMService):
             logger.info(f"Full response length: {len(response_text)} chars")
             if pending_commands:
                 logger.info(f"Pending Reachy commands: {pending_commands}")
+            
+            # Feed response to Soul System for emotion inference
+            if self._soul:
+                self._soul.on_bot_response(response_text)
             
             # Clean up "Image URL:" prefix but keep the URL in the text
             # The URL will be captured by transcript, then stripped by URLFilterProcessor before TTS
