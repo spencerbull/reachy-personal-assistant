@@ -199,7 +199,64 @@ uv sync
 
 ## Running the System
 
-### Quick Start (Recommended)
+### Option 1: Docker (Recommended)
+
+The easiest way to run the full stack. Everything is containerized except the Reachy daemon (which needs hardware access).
+
+```bash
+# 1. Configure environment
+cp .env.template .env
+# Edit .env with your API keys (ELEVENLABS_API_KEY, HUGGING_FACE_HUB_TOKEN, etc.)
+
+# 2. Start the Reachy daemon on host
+./start_daemon.sh
+
+# 3. Start Docker stack (builds on first run)
+./start_docker.sh --build
+```
+
+This starts:
+| Service | Port | Description |
+|---------|------|-------------|
+| `agent-llm` | 8002 | Qwen3-VL-30B (main agent + soul inference) |
+| `routing-llm` | 8003 | Phi-3-mini (fast intent routing) |
+| `bot` | 7860 | Pipecat pipeline + LangGraph + Soul System |
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────┐
+│                   Docker Network                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
+│  │  agent-llm  │  │ routing-llm │  │     bot     │ │
+│  │   :8002     │  │    :8003    │  │    :7860    │ │
+│  └─────────────┘  └─────────────┘  └──────┬──────┘ │
+└────────────────────────────────────────────┼────────┘
+                              host.docker.internal
+                                             │
+                    ┌────────────────────────▼────────┐
+                    │     Reachy Daemon (host)        │
+                    │   Hardware/Simulation Access    │
+                    └─────────────────────────────────┘
+```
+
+**Useful commands:**
+```bash
+# View logs
+docker compose -f local/docker-compose.yml logs -f bot
+
+# Rebuild after code changes
+./start_docker.sh --build
+
+# Stop everything
+docker compose -f local/docker-compose.yml down
+
+# Start daemon + docker in one command
+./start_docker.sh --daemon --build
+```
+
+### Option 2: Native (Development)
+
+For development or if you prefer running without Docker:
 
 1. **Terminal 1 (Robot Daemon)**:
     ```bash
@@ -207,33 +264,30 @@ uv sync
     ```
     *(Edit script to remove `--sim` for real hardware)*
 
-2. **Terminal 2 (Bot Service with LangGraph + Soul)**:
+2. **Terminal 2 (vLLM Models)**:
+    ```bash
+    cd local
+    docker compose up -d agent-llm routing-llm
+    ```
+
+3. **Terminal 3 (Bot Service)**:
     ```bash
     ./start_bot.sh --langgraph
     ```
 
 The Soul System starts automatically when a client connects.
 
-### With Local Models (vLLM)
-
-Start vLLM containers for local inference:
-
-```bash
-cd local
-docker compose up -d
-```
-
-This starts:
-- **agent-llm** (port 8002): Qwen3-VL-30B for main agent + soul inference
-- **routing-llm** (port 8003): Phi-3-mini for fast routing
-
-For GB10 hardware, the compose file is configured for optimal memory utilization with `--max-num-seqs 4` for concurrent soul inference.
-
 ## Project Structure
 
 ```
 reachy-personal-assistant/
-├── REACHY_SOUL.md                 # Personality definition (NEW)
+├── REACHY_SOUL.md                 # Personality definition
+├── Dockerfile                     # Bot container build
+├── .dockerignore                  # Docker build exclusions
+├── .env.template                  # Environment template
+├── start_docker.sh                # Docker stack launcher
+├── start_daemon.sh                # Reachy daemon launcher
+├── start_bot.sh                   # Native bot launcher
 ├── agent/                         # LangGraph agent
 │   ├── graph.py                   # Main StateGraph definition
 │   ├── state.py                   # Agent state schema
@@ -251,7 +305,7 @@ reachy-personal-assistant/
 │   │   ├── spatial.py             # Object location memory
 │   │   ├── long_term.py           # User preferences
 │   │   └── emotional.py           # Emotional state
-│   └── soul/                      # Soul System (NEW)
+│   └── soul/                      # Soul System
 │       ├── __init__.py            # Public API
 │       ├── config.py              # SoulConfig, PersonalityConfig
 │       ├── loop.py                # Main async embodiment loop
@@ -264,8 +318,9 @@ reachy-personal-assistant/
 │   ├── main.py                    # Main orchestration
 │   ├── langgraph_llm.py           # LangGraph LLM service + Soul integration
 │   └── services/                  # Robot services
-├── local/                         # Local deployment
-│   └── docker-compose.yml         # vLLM configuration for GB10
+│       └── reachy_service.py      # Daemon connection (Docker-aware)
+├── local/                         # Docker deployment
+│   └── docker-compose.yml         # Full stack (vLLM + bot)
 ├── mcp_servers/                   # Custom MCP servers
 └── SOUL_SYSTEM_PLAN.md            # Architecture documentation
 ```
