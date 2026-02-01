@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+!ces_tutorial.png
+nat/
+mcp_servers/
+.langgraph_api/
+*.log
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.docker/
+
+# Documentation (keep README)
+SCRIPT.md
+SOUL_SYSTEM_PLAN.md
+LICENSE

@@ -1,3 +1,4 @@
+import os
 import threading
 import logging
 from reachy_mini import ReachyMini
@@ -8,16 +9,32 @@ from reachy_mini.utils import create_head_pose
 
 logger = logging.getLogger(__name__)
 
+
+def get_connection_mode() -> str:
+    """
+    Determine ReachyMini connection mode based on environment.
+    
+    - REACHY_DAEMON_HOST set (e.g., 'host.docker.internal') -> 'network' mode
+    - Default -> 'auto' (localhost first, then network)
+    """
+    daemon_host = os.getenv('REACHY_DAEMON_HOST')
+    if daemon_host and daemon_host != 'localhost':
+        logger.info(f"Docker mode detected (REACHY_DAEMON_HOST={daemon_host}), using network connection mode")
+        return 'network'
+    return 'auto'
+
+
 class ReachyService:
     _instance = None
     _lock = threading.Lock()
 
-    def __init__(self, host='localhost'):
+    def __init__(self, host: str = None):
         self.robot = None
         self.motion_manager = None
         self.wobbler = None
-        self.host = host
+        self.host = host or os.getenv('REACHY_DAEMON_HOST', 'localhost')
         self.connected = False
+        self._connection_mode = get_connection_mode()
 
     @classmethod
     def get_instance(cls):
@@ -49,16 +66,16 @@ class ReachyService:
             logger.info("Waiting for display to be ready...")
             time.sleep(3)
             
-            logger.info(f"Starting Reachy Mini daemon (expecting sim mode)...")
+            logger.info(f"Connecting to Reachy Mini daemon (mode={self._connection_mode}, host={self.host})...")
             
             self.robot = ReachyMini(
                 use_sim=True,
                 spawn_daemon=False,
-                localhost_only=False,     
-                timeout=15.0,          # Increased timeout
+                connection_mode=self._connection_mode,  # 'auto', 'localhost_only', or 'network'
+                timeout=15.0,
                 log_level='DEBUG'      
             )
-            logger.info("Successfully connected to Reachy Mini daemon")
+            logger.info(f"Successfully connected to Reachy Mini daemon")
             
             # 1. Initialize Motor Cortex (Background Thread)
             self.motion_manager = MovementManager(self.robot)
