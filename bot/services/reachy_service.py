@@ -10,18 +10,18 @@ from reachy_mini.utils import create_head_pose
 logger = logging.getLogger(__name__)
 
 
-def get_connection_mode() -> str:
+def get_localhost_only() -> bool:
     """
-    Determine ReachyMini connection mode based on environment.
-    
-    - REACHY_DAEMON_HOST set (e.g., 'host.docker.internal') -> 'network' mode
-    - Default -> 'auto' (localhost first, then network)
+    Determine ReachyMini localhost_only setting based on environment.
+
+    - REACHY_DAEMON_HOST set (e.g., 'host.docker.internal') -> False (allow network)
+    - Default -> True (localhost only)
     """
     daemon_host = os.getenv('REACHY_DAEMON_HOST')
     if daemon_host and daemon_host != 'localhost':
-        logger.info(f"Docker mode detected (REACHY_DAEMON_HOST={daemon_host}), using network connection mode")
-        return 'network'
-    return 'auto'
+        logger.info(f"Docker mode detected (REACHY_DAEMON_HOST={daemon_host}), allowing network connections")
+        return False
+    return True
 
 
 class ReachyService:
@@ -34,7 +34,7 @@ class ReachyService:
         self.wobbler = None
         self.host = host or os.getenv('REACHY_DAEMON_HOST', 'localhost')
         self.connected = False
-        self._connection_mode = get_connection_mode()
+        self._localhost_only = get_localhost_only()
 
     @classmethod
     def get_instance(cls):
@@ -66,14 +66,14 @@ class ReachyService:
             logger.info("Waiting for display to be ready...")
             time.sleep(3)
             
-            logger.info(f"Connecting to Reachy Mini daemon (mode={self._connection_mode}, host={self.host})...")
-            
+            logger.info(f"Connecting to Reachy Mini daemon (localhost_only={self._localhost_only}, host={self.host})...")
+
             self.robot = ReachyMini(
                 use_sim=True,
                 spawn_daemon=False,
-                connection_mode=self._connection_mode,  # 'auto', 'localhost_only', or 'network'
+                localhost_only=self._localhost_only,
                 timeout=15.0,
-                log_level='DEBUG'      
+                log_level='DEBUG'
             )
             logger.info(f"Successfully connected to Reachy Mini daemon")
             

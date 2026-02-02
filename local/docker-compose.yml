@@ -116,50 +116,50 @@ services:
   # ============================================
   # Bot Service (Pipecat + LangGraph + Soul)
   # ============================================
-  bot:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-    container_name: reachy-bot
-    environment:
-      # LLM Configuration
-      - LLM_BACKEND=langgraph
-      - MAIN_MODEL_URL=http://agent-llm:8000/v1
-      - ROUTER_MODEL_URL=http://routing-llm:8000/v1
-      # Soul System
-      - SOUL_FILE_PATH=/app/REACHY_SOUL.md
-      - SOUL_POLL_INTERVAL_MS=${SOUL_POLL_INTERVAL_MS:-200}
-      - SOUL_ENABLE_IDLE=${SOUL_ENABLE_IDLE:-true}
-      - SOUL_DEBUG_LOGGING=${SOUL_DEBUG_LOGGING:-false}
-      # Reachy Daemon (runs on host)
-      - REACHY_DAEMON_HOST=host.docker.internal
-      # External APIs (from .env)
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-      - DAILY_API_KEY=${DAILY_API_KEY}
-      - DAILY_ROOM_URL=${DAILY_ROOM_URL}
-      # Optional APIs
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GOOGLE_OAUTH_TOKEN=${GOOGLE_OAUTH_TOKEN:-}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-    ports:
-      - "7860:7860"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      agent-llm:
-        condition: service_healthy
-      routing-llm:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:7860/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - reachy-net
-
+  #  bot:
+  #  build:
+  #    context: ..
+  #    dockerfile: Dockerfile
+  #  container_name: reachy-bot
+  #  environment:
+  #    # LLM Configuration
+  #    - LLM_BACKEND=langgraph
+  #    - MAIN_MODEL_URL=http://agent-llm:8000/v1
+  #    - ROUTER_MODEL_URL=http://routing-llm:8000/v1
+  #    # Soul System
+  #    - SOUL_FILE_PATH=/app/REACHY_SOUL.md
+  #    - SOUL_POLL_INTERVAL_MS=${SOUL_POLL_INTERVAL_MS:-200}
+  #    - SOUL_ENABLE_IDLE=${SOUL_ENABLE_IDLE:-true}
+  #    - SOUL_DEBUG_LOGGING=${SOUL_DEBUG_LOGGING:-false}
+  #    # Reachy Daemon (runs on host)
+  #    - REACHY_DAEMON_HOST=host.docker.internal
+  #    # External APIs (from .env)
+  #    - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+  #    - DAILY_API_KEY=${DAILY_API_KEY}
+  #    - DAILY_ROOM_URL=${DAILY_ROOM_URL}
+  #    # Optional APIs
+  #    - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+  #    - GOOGLE_OAUTH_TOKEN=${GOOGLE_OAUTH_TOKEN:-}
+  #    - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+  #  ports:
+  #    - "7860:7860"
+  #  extra_hosts:
+  #    - "host.docker.internal:host-gateway"
+  #  depends_on:
+  #    agent-llm:
+  #      condition: service_healthy
+  #    routing-llm:
+  #      condition: service_healthy
+  #  healthcheck:
+  #    test: ["CMD-SHELL", "curl -f http://localhost:7860/health || exit 1"]
+  #    interval: 30s
+  #    timeout: 10s
+  #    retries: 3
+  #    start_period: 30s
+  #  restart: unless-stopped
+  #  networks:
+  #    - reachy-net
+  
 networks:
   reachy-net:
     driver: bridge

@@ -63,9 +63,9 @@ class SoulConfig:
     poll_interval_ms: int = 200
     emotion_inference_interval_ms: int = 1000  # Don't run LLM every loop
     
-    # Model configuration (same as main agent by default)
-    soul_model_url: str = "http://localhost:8002/v1"
-    soul_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
+    # Model configuration (use router model for fast emotion inference)
+    soul_model_url: str = "http://localhost:8003/v1"
+    soul_model_name: str = "microsoft/Phi-3-mini-4k-instruct"
     soul_model_temperature: float = 0.3  # Lower for consistent emotion inference
     soul_model_max_tokens: int = 100  # Small response for emotion JSON
     
@@ -122,8 +122,8 @@ class SoulConfig:
         return cls(
             poll_interval_ms=int(os.getenv("SOUL_POLL_INTERVAL_MS", "200")),
             emotion_inference_interval_ms=int(os.getenv("SOUL_EMOTION_INFERENCE_INTERVAL_MS", "1000")),
-            soul_model_url=os.getenv("SOUL_MODEL_URL", "http://localhost:8002/v1"),
-            soul_model_name=os.getenv("SOUL_MODEL_NAME", "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"),
+            soul_model_url=os.getenv("SOUL_MODEL_URL", "http://localhost:8003/v1"),
+            soul_model_name=os.getenv("SOUL_MODEL_NAME", "microsoft/Phi-3-mini-4k-instruct"),
             idle_breathing_enabled=os.getenv("SOUL_IDLE_BREATHING", "true").lower() == "true",
             idle_micro_movements_enabled=os.getenv("SOUL_IDLE_MICRO_MOVEMENTS", "true").lower() == "true",
             idle_scanning_enabled=os.getenv("SOUL_IDLE_SCANNING", "true").lower() == "true",

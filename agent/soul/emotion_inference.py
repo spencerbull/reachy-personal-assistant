@@ -198,7 +198,7 @@ What should the emotional state be now?"""
         url = f"{self.config.soul_model_url}/chat/completions"
         
         try:
-            async with session.post(url, json=payload, timeout=5.0) as response:
+            async with session.post(url, json=payload, timeout=10.0) as response:
                 if response.status != 200:
                     error_text = await response.text()
                     logger.error(f"LLM API error: {response.status} - {error_text}")

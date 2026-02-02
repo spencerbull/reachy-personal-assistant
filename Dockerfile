@@ -26,6 +26,8 @@ COPY bot/uv.lock* bot/
 # Create venv and install dependencies
 WORKDIR /app/bot
 RUN uv venv /app/.venv
+ENV VIRTUAL_ENV="/app/.venv"
+ENV PATH="/app/.venv/bin:$PATH"
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
 # ============================================
@@ -37,7 +39,7 @@ WORKDIR /app
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
