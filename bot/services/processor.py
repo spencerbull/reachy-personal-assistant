@@ -39,6 +39,8 @@ class ReachyWobblerProcessor(FrameProcessor):
         if isinstance(frame, BotStartedSpeakingFrame):
             self.bot_is_speaking = True
             self.seen_audio_hashes.clear()  # Clear hashes when new speech starts
+            # Reset wobbler timing for new speech session - fixes fast/jumpy playback
+            self.service.reset_wobbler()
             
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self.bot_is_speaking = False

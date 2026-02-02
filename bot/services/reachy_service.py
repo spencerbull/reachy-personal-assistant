@@ -1,10 +1,11 @@
 import os
 import threading
 import logging
+import numpy as np
 from reachy_mini import ReachyMini
 from .moves import MovementManager
 from .wobbler import HeadWobbler
-from .dance_emotion_moves import GotoQueueMove
+from .dance_emotion_moves import GotoQueueMove, AntennaWaveQueueMove
 from reachy_mini.utils import create_head_pose
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,135 @@ class ReachyService:
             logger.info(f"Reachy looking {direction}")
         except Exception as e:
             logger.error(f"Look at failed: {e}")
+
+    def apply_soul_pose(self, pose_dict: dict):
+        """
+        Apply a pose from the Soul System as secondary offsets.
+
+        The pose_dict comes from MovementBlender.to_reachy_command() with keys:
+        - head_pitch, head_yaw, head_roll (in DEGREES)
+        - head_z_offset (in meters)
+        - left_antenna, right_antenna (in radians)
+        - body_yaw (in degrees)
+
+        Soul poses are applied as secondary offsets that blend smoothly
+        with the primary movement system (breathing, dances, etc.) and
+        other secondary offsets (speech sway, face tracking).
+
+        Args:
+            pose_dict: Dictionary with movement parameters
+        """
+        if not self.connected or not self.motion_manager:
+            return
+
+        try:
+            # Extract pose values and convert to offset format
+            # Note: head angles come in degrees, need to convert to radians
+            head_pitch_rad = np.deg2rad(pose_dict.get('head_pitch', 0.0))
+            head_yaw_rad = np.deg2rad(pose_dict.get('head_yaw', 0.0))
+            head_roll_rad = np.deg2rad(pose_dict.get('head_roll', 0.0))
+            head_z_offset = pose_dict.get('head_z_offset', 0.0)  # already in meters
+
+            # Antennas are already in radians
+            left_antenna = pose_dict.get('left_antenna', 0.0)
+            right_antenna = pose_dict.get('right_antenna', 0.0)
+
+            # Apply as secondary offsets
+            # Format: (x, y, z, roll, pitch, yaw) in meters and radians
+            head_offsets = (
+                0.0,  # x
+                0.0,  # y
+                head_z_offset,  # z
+                head_roll_rad,  # roll
+                head_pitch_rad,  # pitch
+                head_yaw_rad,  # yaw
+            )
+            antenna_offsets = (left_antenna, right_antenna)
+
+            self.motion_manager.set_soul_offsets(head_offsets, antenna_offsets)
+
+        except Exception as e:
+            logger.debug(f"Soul pose application failed: {e}")
+
+    def antenna_wave(self):
+        """Perform an antenna wave greeting gesture."""
+        if not self.connected or not self.motion_manager:
+            return
+
+        try:
+            _, current_antennas = self.robot.get_current_joint_positions()
+            wave_move = AntennaWaveQueueMove(
+                start_antennas=(current_antennas[0], current_antennas[1])
+            )
+            self.motion_manager.queue_move(wave_move)
+            logger.info("Antenna wave queued")
+        except Exception as e:
+            logger.debug(f"Antenna wave failed: {e}")
+
+    def set_face_tracking(self, enabled: bool):
+        """Enable or disable face tracking mode."""
+        if not self.connected:
+            return
+
+        # Face tracking is handled by the camera processor
+        # This is a hook for the soul system to control it
+        try:
+            from services.camera_service import CameraFrameProcessor
+            cam_processor = CameraFrameProcessor.get_instance()
+            if cam_processor:
+                cam_processor.enable_face_tracking(enabled)
+                logger.info(f"Face tracking {'enabled' if enabled else 'disabled'}")
+        except Exception as e:
+            logger.debug(f"Face tracking control failed: {e}")
+
+    def reset_wobbler(self):
+        """Reset the wobbler timing for new speech session."""
+        if self.wobbler:
+            self.wobbler.reset()
+            logger.debug("Wobbler timing reset")
+
+    def look_around(self, yaw_rad: float, pitch_rad: float, duration: float = 1.0):
+        """
+        Make Reachy look in a specific direction (for room scanning, etc.).
+
+        Args:
+            yaw_rad: Target yaw angle in radians (+ left, - right)
+            pitch_rad: Target pitch angle in radians (- up, + down)
+            duration: Duration of the movement
+        """
+        if not self.connected or not self.motion_manager or not self.robot:
+            return
+
+        try:
+            target_pose = create_head_pose(
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                roll=0.0,
+                pitch=np.rad2deg(pitch_rad),
+                yaw=np.rad2deg(yaw_rad),
+                degrees=True,
+                mm=False
+            )
+
+            current_head_pose = self.robot.get_current_head_pose()
+            _, current_antennas = self.robot.get_current_joint_positions()
+
+            goto_move = GotoQueueMove(
+                target_head_pose=target_pose,
+                start_head_pose=current_head_pose,
+                target_antennas=(0.0, 0.0),  # Neutral antennas during scan
+                start_antennas=(current_antennas[0], current_antennas[1]),
+                target_body_yaw=0,
+                start_body_yaw=0,
+                duration=duration
+            )
+            self.motion_manager.queue_move(goto_move)
+            self.motion_manager.set_moving_state(duration)
+            logger.debug(f"Look around: yaw={np.rad2deg(yaw_rad):.1f}°, pitch={np.rad2deg(pitch_rad):.1f}°")
+
+        except Exception as e:
+            logger.debug(f"Look around failed: {e}")
 
     def disconnect(self):
         """Disconnect and cleanup Reachy resources."""

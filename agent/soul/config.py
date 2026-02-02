@@ -60,28 +60,34 @@ class SoulConfig:
     """
     
     # Polling / Loop timing
+    # NOTE: Poll interval affects responsiveness of emotion/behavior changes
+    # Keep fast (200ms) for quick reactions, emotion inference runs separately
     poll_interval_ms: int = 200
-    emotion_inference_interval_ms: int = 1000  # Don't run LLM every loop
+    emotion_inference_interval_ms: int = 2000  # LLM inference every 2s (expensive)
     
-    # Model configuration (use router model for fast emotion inference)
-    soul_model_url: str = "http://localhost:8003/v1"
-    soul_model_name: str = "microsoft/Phi-3-mini-4k-instruct"
+    # Model configuration (use VLM for emotion inference)
+    soul_model_url: str = "http://localhost:8002/v1"
+    soul_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
     soul_model_temperature: float = 0.3  # Lower for consistent emotion inference
     soul_model_max_tokens: int = 100  # Small response for emotion JSON
     
     # Idle behavior - Breathing
-    idle_breathing_enabled: bool = True
+    # NOTE: Disabled because MovementManager has its own BreathingMove
+    # that handles breathing animations. Enabling this would cause conflicts.
+    idle_breathing_enabled: bool = False
     idle_breathing_frequency_hz: float = 0.15  # ~9 breaths per minute (relaxed)
     idle_breathing_amplitude: float = 0.003  # 3mm subtle movement
-    
+
     # Idle behavior - Micro movements
-    idle_micro_movements_enabled: bool = True
+    # NOTE: Disabled - let MovementManager handle idle behaviors
+    idle_micro_movements_enabled: bool = False
     idle_micro_movement_amplitude: float = 0.02  # ~1 degree subtle shifts
     idle_micro_movement_frequency_hz: float = 0.1  # Every ~10 seconds
-    
+
     # Idle behavior - Scanning
+    # Soul-driven room scanning when idle
     idle_scanning_enabled: bool = True
-    idle_scan_interval_s: float = 30.0  # Scan room every 30s when idle
+    idle_scan_interval_s: float = 45.0  # Scan room every 45s when idle
     
     # Movement blending
     movement_blend_duration_s: float = 0.5  # 500ms transitions
@@ -121,9 +127,9 @@ class SoulConfig:
         
         return cls(
             poll_interval_ms=int(os.getenv("SOUL_POLL_INTERVAL_MS", "200")),
-            emotion_inference_interval_ms=int(os.getenv("SOUL_EMOTION_INFERENCE_INTERVAL_MS", "1000")),
-            soul_model_url=os.getenv("SOUL_MODEL_URL", "http://localhost:8003/v1"),
-            soul_model_name=os.getenv("SOUL_MODEL_NAME", "microsoft/Phi-3-mini-4k-instruct"),
+            emotion_inference_interval_ms=int(os.getenv("SOUL_EMOTION_INFERENCE_INTERVAL_MS", "2000")),
+            soul_model_url=os.getenv("SOUL_MODEL_URL", "http://localhost:8002/v1"),
+            soul_model_name=os.getenv("SOUL_MODEL_NAME", "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"),
             idle_breathing_enabled=os.getenv("SOUL_IDLE_BREATHING", "true").lower() == "true",
             idle_micro_movements_enabled=os.getenv("SOUL_IDLE_MICRO_MOVEMENTS", "true").lower() == "true",
             idle_scanning_enabled=os.getenv("SOUL_IDLE_SCANNING", "true").lower() == "true",

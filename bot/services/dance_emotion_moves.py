@@ -203,3 +203,60 @@ class AntennaWaveMove(Move):  # type: ignore
             from reachy_mini.utils import create_head_pose
             neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
             return (neutral_head_pose, np.array([0.0, 0.0], dtype=np.float64), 0.0)
+
+
+class AntennaWaveQueueMove(Move):  # type: ignore
+    """Queue-compatible antenna wave move with smooth transition from current position."""
+
+    def __init__(
+        self,
+        start_antennas: Tuple[float, float] = (0.0, 0.0),
+        duration: float = 1.0,
+    ):
+        """Initialize an AntennaWaveQueueMove.
+
+        Args:
+            start_antennas: Current antenna positions to blend from
+            duration: Total duration including blend-in and wave
+        """
+        self._duration = duration
+        self.start_antennas = start_antennas
+        self.wave_amplitude = np.deg2rad(25)  # 25 degrees max amplitude
+        self.wave_frequency = 4.0  # 4 Hz wave
+        self.blend_in_time = 0.15  # Quick blend to wave start
+
+    @property
+    def duration(self) -> float:
+        """Duration property required by official Move interface."""
+        return self._duration
+
+    def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
+        """Evaluate antenna wave with smooth blend from start position."""
+        try:
+            from reachy_mini.utils import create_head_pose
+
+            neutral_head = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+
+            if t < self.blend_in_time:
+                # Blend from start position to wave start
+                blend = t / self.blend_in_time
+                left = self.start_antennas[0] * (1 - blend)
+                right = self.start_antennas[1] * (1 - blend)
+                antennas = np.array([left, right], dtype=np.float64)
+            else:
+                # Wave phase - decay envelope
+                wave_t = t - self.blend_in_time
+                wave_duration = self._duration - self.blend_in_time
+                envelope = max(0.0, 1.0 - (wave_t / wave_duration))
+
+                # Both antennas wave in opposite directions
+                wave = self.wave_amplitude * np.sin(2 * np.pi * self.wave_frequency * wave_t) * envelope
+                antennas = np.array([wave, -wave], dtype=np.float64)
+
+            return (neutral_head, antennas, 0.0)
+
+        except Exception as e:
+            logger.error(f"Error evaluating antenna wave queue move at t={t}: {e}")
+            from reachy_mini.utils import create_head_pose
+            neutral_head_pose = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+            return (neutral_head_pose, np.array([0.0, 0.0], dtype=np.float64), 0.0)
