@@ -110,8 +110,21 @@ class SoulConfig:
     # Personality
     personality: PersonalityConfig = field(default_factory=PersonalityConfig)
     
-    # Debug
+    # Logging Configuration
+    # debug_logging: Enable verbose debug output for all soul components
+    # log_level: Overall log level ("DEBUG", "INFO", "WARNING", "ERROR")
+    # log_emotions: Log emotion inference and changes
+    # log_events: Log soul event processing  
+    # log_decisions: Log decision points and reasoning
+    # log_movements: Log pose/movement updates (can be noisy)
+    # log_status_interval_s: How often to log status summary (0 to disable)
     debug_logging: bool = False
+    log_level: str = "INFO"
+    log_emotions: bool = True
+    log_events: bool = True
+    log_decisions: bool = True
+    log_movements: bool = False  # Can be very noisy
+    log_status_interval_s: float = 30.0  # Status summary every 30s
     
     @classmethod
     def from_env(cls) -> "SoulConfig":
@@ -135,6 +148,12 @@ class SoulConfig:
             idle_scanning_enabled=os.getenv("SOUL_IDLE_SCANNING", "true").lower() == "true",
             personality=personality,
             debug_logging=os.getenv("SOUL_DEBUG", "false").lower() == "true",
+            log_level=os.getenv("SOUL_LOG_LEVEL", "INFO").upper(),
+            log_emotions=os.getenv("SOUL_LOG_EMOTIONS", "true").lower() == "true",
+            log_events=os.getenv("SOUL_LOG_EVENTS", "true").lower() == "true",
+            log_decisions=os.getenv("SOUL_LOG_DECISIONS", "true").lower() == "true",
+            log_movements=os.getenv("SOUL_LOG_MOVEMENTS", "false").lower() == "true",
+            log_status_interval_s=float(os.getenv("SOUL_LOG_STATUS_INTERVAL_S", "30.0")),
         )
     
     def to_dict(self) -> dict:
@@ -153,5 +172,14 @@ class SoulConfig:
                 "auto_reload": self.personality.auto_reload,
                 "use_personality_expressions": self.personality.use_personality_expressions,
                 "use_personality_prompts": self.personality.use_personality_prompts,
+            },
+            "logging": {
+                "debug_logging": self.debug_logging,
+                "log_level": self.log_level,
+                "log_emotions": self.log_emotions,
+                "log_events": self.log_events,
+                "log_decisions": self.log_decisions,
+                "log_movements": self.log_movements,
+                "log_status_interval_s": self.log_status_interval_s,
             },
         }

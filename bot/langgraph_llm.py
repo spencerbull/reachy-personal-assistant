@@ -155,9 +155,45 @@ class LangGraphLLMService(LLMService):
     
     async def stop_soul(self):
         """Stop the Soul System embodiment loop."""
-        if self._soul and self._soul.is_running:
-            await self._soul.stop()
-            logger.info("Soul System stopped")
+        if self._soul:
+            try:
+                await self._soul.stop()
+                logger.info("Soul System stopped")
+            except asyncio.CancelledError:
+                logger.info("Soul System stop cancelled")
+                raise
+            except Exception as e:
+                logger.warning(f"Soul System stop error: {e}")
+    
+    async def cleanup(self):
+        """
+        Clean up resources. Call this on shutdown.
+        
+        This method is safe to call multiple times and handles
+        cancellation gracefully.
+        """
+        logger.info("LangGraphLLMService cleanup starting...")
+        
+        # Stop soul system
+        try:
+            await self.stop_soul()
+        except asyncio.CancelledError:
+            # Force cancel the soul task if we're being cancelled
+            if self._soul and self._soul._task and not self._soul._task.done():
+                self._soul._task.cancel()
+            raise
+        except Exception as e:
+            logger.warning(f"Soul cleanup error: {e}")
+        
+        # Close MCP connections
+        if self._mcp_loader:
+            try:
+                await self._mcp_loader.close()
+                logger.info("MCP connections closed")
+            except Exception as e:
+                logger.warning(f"MCP cleanup error: {e}")
+        
+        logger.info("LangGraphLLMService cleanup complete")
     
     def set_reachy_service(self, service):
         """Set or update the Reachy service for soul movement commands."""

@@ -16,8 +16,10 @@ from typing import Optional, Tuple
 
 from agent.soul.config import SoulConfig
 from agent.soul.movement_blender import Pose
+from agent.soul.logging_utils import SoulLogger
 
 logger = logging.getLogger(__name__)
+soul_log = SoulLogger("agent.soul.idle")
 
 
 @dataclass
@@ -174,13 +176,14 @@ class IdleGenerator:
         """Start an idle room scan."""
         self._state.is_scanning = True
         self._state.scan_start_time = time.time()
-        logger.debug("Starting idle room scan")
+        soul_log.log_idle_action("scan_started", {"idle_duration": f"{self.idle_duration_s:.1f}s"})
     
     def end_scan(self):
         """End an idle room scan."""
+        scan_duration = time.time() - self._state.scan_start_time
         self._state.is_scanning = False
         self._state.time_since_last_scan = 0.0
-        logger.debug("Idle room scan complete")
+        soul_log.log_idle_action("scan_completed", {"duration": f"{scan_duration:.1f}s"})
     
     def get_scan_target(self) -> Optional[Tuple[float, float]]:
         """
@@ -226,12 +229,17 @@ class IdleGenerator:
     
     def reset_idle_timer(self):
         """Reset the idle timer (call when user interacts)."""
+        was_idle_for = self.idle_duration_s
         self._idle_start_time = time.time()
         self._state.time_since_last_scan = 0.0
         
         # Stop any active scan
         if self._state.is_scanning:
+            soul_log.log_idle_action("scan_interrupted", {"reason": "user_interaction"})
             self.end_scan()
+        
+        if was_idle_for > 5.0:
+            soul_log.log_idle_action("idle_reset", {"was_idle_for": f"{was_idle_for:.1f}s"})
     
     @property
     def idle_duration_s(self) -> float:

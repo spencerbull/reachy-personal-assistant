@@ -15,12 +15,14 @@ from typing import Optional, Literal, TYPE_CHECKING
 import aiohttp
 
 from agent.soul.config import SoulConfig
+from agent.soul.logging_utils import SoulLogger, LogTimer
 from agent.memory.emotional import EmotionalState, EMOTION_EXPRESSIONS
 
 if TYPE_CHECKING:
     from agent.soul.personality import Personality
 
 logger = logging.getLogger(__name__)
+soul_log = SoulLogger("agent.soul.emotion")
 
 
 @dataclass
@@ -115,18 +117,30 @@ movement_hint is optional - use for specific actions like "nod", "tilt_head", "l
         user_state: Optional[str] = None,
     ):
         """Update conversation context for inference."""
+        context_updates = []
+        
         if user_message is not None:
             self._last_user_message = user_message
             self._last_interaction_time = time.time()
+            context_updates.append(f"user_msg='{user_message[:30]}...'" if len(user_message) > 30 else f"user_msg='{user_message}'")
+        
         if bot_response is not None:
             self._last_bot_response = bot_response
             self._last_interaction_time = time.time()
+            context_updates.append(f"bot_resp='{bot_response[:30]}...'" if len(bot_response) > 30 else f"bot_resp='{bot_response}'")
+        
         if user_state is not None:
+            old_state = self._user_state
             self._user_state = user_state
             if user_state == "speaking":
                 self._last_interaction_time = time.time()
+            if old_state != user_state:
+                context_updates.append(f"user_state: {old_state} → {user_state}")
         
         self._time_since_interaction_ms = int((time.time() - self._last_interaction_time) * 1000)
+        
+        if context_updates and self.config.log_emotions:
+            logger.debug(f"[EMOTION] context_update: {', '.join(context_updates)}")
     
     def _build_inference_prompt(self) -> str:
         """Build the prompt for emotion inference."""
@@ -162,11 +176,35 @@ What should the emotional state be now?"""
         
         self._last_inference_time = now
         start_time = time.time()
+        old_emotion = self._current_emotion.emotion
+        old_intensity = self._current_emotion.intensity
         
         try:
             result = await self._call_llm()
             result.inference_time_ms = (time.time() - start_time) * 1000
             self._current_emotion = result
+            
+            # Log the inference result
+            if self.config.log_emotions:
+                soul_log.log_emotion_inference(
+                    emotion=result.emotion,
+                    intensity=result.intensity,
+                    confidence=result.confidence,
+                    movement_hint=result.movement_hint,
+                    inference_time_ms=result.inference_time_ms,
+                    prompt_preview=self._last_user_message,
+                )
+                
+                # Log emotion change if it changed
+                if result.emotion != old_emotion or abs(result.intensity - old_intensity) > 0.15:
+                    soul_log.log_emotion_change(
+                        old_emotion=old_emotion,
+                        new_emotion=result.emotion,
+                        intensity=result.intensity,
+                        reason=f"user: '{self._last_user_message[:40]}...'" if len(self._last_user_message) > 40 else f"user: '{self._last_user_message}'",
+                        source="LLM",
+                        inference_time_ms=result.inference_time_ms,
+                    )
             
             if self.config.debug_logging:
                 logger.debug(f"Emotion inference: {result} ({result.inference_time_ms:.0f}ms)")
@@ -174,7 +212,7 @@ What should the emotional state be now?"""
             return result
             
         except Exception as e:
-            logger.error(f"Emotion inference failed: {e}")
+            logger.error(f"[EMOTION] inference_failed: {e}")
             # Return current emotion on failure
             return self._current_emotion
     
@@ -230,13 +268,16 @@ What should the emotional state be now?"""
             emotion = data.get("emotion", "neutral").lower()
             # Validate emotion
             if emotion not in EMOTION_EXPRESSIONS:
-                logger.warning(f"Unknown emotion '{emotion}', defaulting to neutral")
+                logger.warning(f"[EMOTION] unknown_emotion: '{emotion}' → defaulting to neutral (valid: {list(EMOTION_EXPRESSIONS.keys())})")
                 emotion = "neutral"
             
             intensity = float(data.get("intensity", 0.5))
             intensity = max(0.0, min(1.0, intensity))  # Clamp to [0, 1]
             
             movement_hint = data.get("movement_hint")
+            
+            if self.config.debug_logging:
+                logger.debug(f"[EMOTION] parsed_response: emotion={emotion}, intensity={intensity:.2f}, hint={movement_hint}")
             
             return EmotionInferenceResult(
                 emotion=emotion,
@@ -245,11 +286,11 @@ What should the emotional state be now?"""
             )
             
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse emotion response: {e}")
-            logger.debug(f"Raw response: {content}")
+            logger.error(f"[EMOTION] parse_failed: JSON error - {e}")
+            logger.debug(f"[EMOTION] raw_response: {content[:200]}")
             return self._current_emotion
         except Exception as e:
-            logger.error(f"Error parsing emotion response: {e}")
+            logger.error(f"[EMOTION] parse_error: {e}")
             return self._current_emotion
     
     def infer_rule_based(self) -> EmotionInferenceResult:
@@ -258,33 +299,54 @@ What should the emotional state be now?"""
         
         Use this for immediate reactions while waiting for LLM inference.
         """
+        result = None
+        rule_applied = None
+        
         # User is speaking -> attentive
         if self._user_state == "speaking":
-            return EmotionInferenceResult(emotion="attentive", intensity=0.7)
+            result = EmotionInferenceResult(emotion="attentive", intensity=0.7)
+            rule_applied = "user_speaking → attentive"
         
         # User just stopped speaking -> thinking (processing)
-        if self._user_state == "waiting" and self._time_since_interaction_ms < 2000:
-            return EmotionInferenceResult(emotion="thinking", intensity=0.5)
+        elif self._user_state == "waiting" and self._time_since_interaction_ms < 2000:
+            result = EmotionInferenceResult(emotion="thinking", intensity=0.5)
+            rule_applied = "user_just_silent → thinking"
         
         # Recent positive interaction
-        if self._last_user_message and self._time_since_interaction_ms < 5000:
+        elif self._last_user_message and self._time_since_interaction_ms < 5000:
             text_lower = self._last_user_message.lower()
             
             if any(w in text_lower for w in ["thank", "thanks", "awesome", "great", "love"]):
-                return EmotionInferenceResult(emotion="happy", intensity=0.7)
+                result = EmotionInferenceResult(emotion="happy", intensity=0.7)
+                rule_applied = f"positive_words in '{self._last_user_message[:20]}' → happy"
             
-            if any(w in text_lower for w in ["?", "what", "how", "why", "tell me"]):
-                return EmotionInferenceResult(emotion="curious", intensity=0.5)
+            elif any(w in text_lower for w in ["?", "what", "how", "why", "tell me"]):
+                result = EmotionInferenceResult(emotion="curious", intensity=0.5)
+                rule_applied = "question_detected → curious"
             
-            if any(w in text_lower for w in ["help", "can you", "please"]):
-                return EmotionInferenceResult(emotion="helpful", intensity=0.6)
+            elif any(w in text_lower for w in ["help", "can you", "please"]):
+                result = EmotionInferenceResult(emotion="helpful", intensity=0.6)
+                rule_applied = "help_request → helpful"
         
         # Long idle -> decay to neutral
-        if self._time_since_interaction_ms > 30000:
-            return EmotionInferenceResult(emotion="neutral", intensity=0.3)
+        if result is None and self._time_since_interaction_ms > 30000:
+            result = EmotionInferenceResult(emotion="neutral", intensity=0.3)
+            rule_applied = f"idle_{self._time_since_interaction_ms}ms → neutral_decay"
         
         # Default: keep current emotion
-        return self._current_emotion
+        if result is None:
+            result = self._current_emotion
+            rule_applied = "no_rule_match → keep_current"
+        
+        # Log rule-based decision (only if emotion changed)
+        if self.config.log_emotions and result.emotion != self._current_emotion.emotion:
+            soul_log.log_emotion_rule_based(
+                emotion=result.emotion,
+                intensity=result.intensity,
+                rule=rule_applied,
+            )
+        
+        return result
     
     @property
     def current_emotion(self) -> EmotionInferenceResult:

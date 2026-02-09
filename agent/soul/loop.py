@@ -35,9 +35,11 @@ from agent.soul.emotion_inference import EmotionInference, EmotionInferenceResul
 from agent.soul.movement_blender import MovementBlender, Pose
 from agent.soul.idle_generator import IdleGenerator
 from agent.soul.personality import Personality, get_personality
+from agent.soul.logging_utils import SoulLogger, configure_soul_logging
 from agent.memory.emotional import EmotionalState
 
 logger = logging.getLogger(__name__)
+soul_log = SoulLogger("agent.soul.loop")
 
 
 @dataclass
@@ -92,6 +94,11 @@ class SoulLoop:
         self._reachy_service = reachy_service
         self._on_movement = on_movement
         
+        # Configure soul logging based on config
+        configure_soul_logging(
+            level=config.log_level if hasattr(config, 'log_level') else "INFO",
+        )
+        
         # Load personality
         if personality is not None:
             self._personality = personality
@@ -99,11 +106,29 @@ class SoulLoop:
             self._personality = Personality.load(config.personality.soul_file_path)
         
         if self._personality.is_loaded():
-            logger.info(f"Loaded personality: {self._personality.name}")
+            # Log personality loading with details
+            active_traits = []
+            if self._personality.traits.curious:
+                active_traits.append("curious")
+            if self._personality.traits.helpful:
+                active_traits.append("helpful")
+            if self._personality.traits.playful:
+                active_traits.append("playful")
+            if self._personality.traits.attentive:
+                active_traits.append("attentive")
+            if self._personality.traits.patient:
+                active_traits.append("patient")
+            
+            soul_log.log_personality_loaded(
+                name=self._personality.name,
+                file_path=self._personality.file_path,
+                traits=active_traits,
+            )
+            
             # Apply embodiment principles to config
             self._apply_personality_to_config()
         else:
-            logger.warning("No personality loaded, using defaults")
+            logger.warning("[PERSONALITY] load_failed: using defaults")
         
         # Subsystems (pass personality to emotion inference)
         self._emotion_inference = EmotionInference(config, self._personality)
@@ -122,8 +147,9 @@ class SoulLoop:
         self._loop_start_time = 0.0
         self._last_emotion_inference_time = 0.0
         self._last_personality_reload = 0.0
+        self._last_status_log_time = 0.0
         
-        logger.info("SoulLoop initialized")
+        logger.info(f"[STATE] SoulLoop initialized: poll={config.poll_interval_ms}ms, emotion_inference={config.emotion_inference_interval_ms}ms")
     
     def _apply_personality_to_config(self):
         """Apply personality embodiment principles to config."""
@@ -134,13 +160,22 @@ class SoulLoop:
         
         # Override config with personality preferences
         if "breathing_enabled" in idle_config:
+            old_val = self.config.idle_breathing_enabled
             self.config.idle_breathing_enabled = idle_config["breathing_enabled"]
+            if self.config.log_decisions:
+                soul_log.log_personality_applied("idle_breathing_enabled", idle_config["breathing_enabled"])
+        
         if "micro_movements_enabled" in idle_config:
             self.config.idle_micro_movements_enabled = idle_config["micro_movements_enabled"]
+            if self.config.log_decisions:
+                soul_log.log_personality_applied("idle_micro_movements_enabled", idle_config["micro_movements_enabled"])
+        
         if "scanning_enabled" in idle_config:
             self.config.idle_scanning_enabled = idle_config["scanning_enabled"]
+            if self.config.log_decisions:
+                soul_log.log_personality_applied("idle_scanning_enabled", idle_config["scanning_enabled"])
         
-        logger.debug(f"Applied personality idle config: {idle_config}")
+        logger.debug(f"[PERSONALITY] applied_config: {idle_config}")
     
     @property
     def personality(self) -> Optional[Personality]:
@@ -152,52 +187,90 @@ class SoulLoop:
         if self._personality.reload():
             self._apply_personality_to_config()
             self._emotion_inference.set_personality(self._personality)
-            logger.info("Personality reloaded successfully")
+            soul_log.log_personality_reloaded()
             return True
+        logger.warning("[PERSONALITY] reload_failed")
         return False
     
     async def start(self):
         """Start the soul loop as a background task."""
         if self._state.is_running:
-            logger.warning("Soul loop already running")
+            logger.warning("[STATE] start_rejected: soul loop already running")
             return
         
         self._stop_event.clear()
         self._state.is_running = True
         self._loop_start_time = time.time()
+        self._last_status_log_time = time.time()
         
         self._task = asyncio.create_task(self._run_loop())
-        logger.info("Soul loop started")
+        
+        # Log startup with config summary
+        soul_log.log_loop_start(config_summary={
+            "poll_ms": self.config.poll_interval_ms,
+            "emotion_ms": self.config.emotion_inference_interval_ms,
+            "personality": self._personality.name if self._personality.is_loaded() else "none",
+            "breathing": self.config.idle_breathing_enabled,
+            "scanning": self.config.idle_scanning_enabled,
+        })
     
     async def stop(self):
         """Stop the soul loop."""
-        if not self._state.is_running:
+        if not self._state.is_running and self._task is None:
             return
         
-        logger.info("Stopping soul loop...")
+        logger.info("[STATE] stopping: initiating graceful shutdown...")
         self._stop_event.set()
         
-        if self._task:
+        if self._task and not self._task.done():
             try:
                 await asyncio.wait_for(self._task, timeout=2.0)
             except asyncio.TimeoutError:
+                logger.warning("[STATE] stop_timeout: force cancelling task")
                 self._task.cancel()
                 try:
                     await self._task
                 except asyncio.CancelledError:
-                    pass
+                    logger.debug("[STATE] task_cancelled: cleanup complete")
+            except asyncio.CancelledError:
+                # If we're being cancelled ourselves, still try to cancel the task
+                if self._task and not self._task.done():
+                    self._task.cancel()
+                    try:
+                        await self._task
+                    except asyncio.CancelledError:
+                        pass
+                raise  # Re-raise to propagate cancellation
         
         self._state.is_running = False
+        self._task = None
         
         # Clean up
-        await self._emotion_inference.close()
+        try:
+            await self._emotion_inference.close()
+        except Exception as e:
+            logger.debug(f"[STATE] cleanup_error: {e}")
         
-        logger.info("Soul loop stopped")
+        # Log shutdown with uptime
+        uptime = time.time() - self._loop_start_time if self._loop_start_time > 0 else 0
+        soul_log.log_loop_stop(uptime_s=uptime)
     
     async def _run_loop(self):
         """Main loop that runs continuously."""
         poll_interval = self.config.poll_interval_ms / 1000.0
         
+        try:
+            await self._run_loop_inner(poll_interval)
+        except asyncio.CancelledError:
+            logger.info("[STATE] loop_cancelled: received cancellation signal")
+            raise  # Re-raise to properly propagate cancellation
+        finally:
+            # Ensure cleanup happens even on cancellation
+            self._state.is_running = False
+            logger.debug("[STATE] loop_exited: cleanup complete")
+    
+    async def _run_loop_inner(self, poll_interval: float):
+        """Inner loop logic, separated for clean cancellation handling."""
         while not self._stop_event.is_set():
             loop_start = time.time()
             
@@ -224,6 +297,8 @@ class SoulLoop:
                 # Check for idle scanning
                 if self._idle_generator.should_scan():
                     self._idle_generator.start_scan()
+                    if self.config.log_decisions:
+                        soul_log.log_scan_start()
                 
                 # Handle active scanning
                 if self._idle_generator.is_scanning:
@@ -241,8 +316,24 @@ class SoulLoop:
                 if idle_duration > 5.0:
                     await self._event_queue.push(IdleTickEvent(idle_duration_s=idle_duration))
                 
+                # Periodic status logging
+                if self.config.log_status_interval_s > 0:
+                    now = time.time()
+                    if now - self._last_status_log_time >= self.config.log_status_interval_s:
+                        self._last_status_log_time = now
+                        soul_log.log_status_summary(
+                            emotion=self._state.current_emotion,
+                            intensity=self._state.emotion_intensity,
+                            user_state=self._state.user_state,
+                            face_detected=self._state.face_detected,
+                            is_responding=self._state.is_responding,
+                            idle_duration_s=self._idle_generator.idle_duration_s,
+                            event_queue_size=self._event_queue.size,
+                            throttle_ms=0,  # Don't throttle, we manage interval ourselves
+                        )
+                
             except Exception as e:
-                logger.error(f"Soul loop error: {e}", exc_info=True)
+                soul_log.log_loop_error(e, context="main_loop")
             
             # Sleep for remainder of poll interval
             elapsed = time.time() - loop_start
@@ -289,10 +380,30 @@ class SoulLoop:
     
     async def _handle_event(self, event: SoulEvent):
         """Handle a single event."""
-        if self.config.debug_logging:
-            logger.debug(f"Soul event: {event}")
+        # Log event receipt
+        if self.config.log_events:
+            event_details = {}
+            preview = None
+            
+            if hasattr(event, 'message'):
+                preview = event.message
+            elif hasattr(event, 'response'):
+                preview = event.response
+            elif hasattr(event, 'silence_duration_ms'):
+                event_details['silence_ms'] = event.silence_duration_ms
+            elif hasattr(event, 'position'):
+                event_details['position'] = event.position
+            elif hasattr(event, 'is_new_face'):
+                event_details['is_new'] = event.is_new_face
+            
+            soul_log.log_event(
+                event_type=event.event_type.value,
+                details=event_details if event_details else None,
+                preview=preview,
+            )
         
         if event.event_type == EventType.USER_SPEAKING:
+            old_state = self._state.user_state
             self._state.user_state = "speaking"
             self._state.last_interaction_time = time.time()
             self._idle_generator.reset_idle_timer()
@@ -301,28 +412,61 @@ class SoulLoop:
             # Immediate reaction: become attentive
             if self.config.user_speaking_triggers_attention:
                 self._movement_blender.set_emotion("attentive", intensity=0.7)
+                if self.config.log_decisions:
+                    soul_log.log_decision(
+                        decision_point="user_speaking_response",
+                        decision="set attentive(0.7)",
+                        reason="user_speaking_triggers_attention=True",
+                    )
+            
+            if self.config.log_events and old_state != "speaking":
+                soul_log.log_state_change("user_state", old_state, "speaking", reason="USER_SPEAKING event")
         
         elif event.event_type == EventType.USER_SILENT:
+            old_state = self._state.user_state
             self._state.user_state = "waiting"
             self._emotion_inference.update_context(user_state="waiting")
             
             # Show thinking pose after short delay
             if self.config.user_silence_triggers_processing_look:
                 self._movement_blender.set_emotion("thinking", intensity=0.5)
+                if self.config.log_decisions:
+                    soul_log.log_decision(
+                        decision_point="user_silent_response",
+                        decision="set thinking(0.5)",
+                        reason="user_silence_triggers_processing_look=True",
+                    )
+            
+            if self.config.log_events and old_state != "waiting":
+                soul_log.log_state_change("user_state", old_state, "waiting", reason="USER_SILENT event")
         
         elif event.event_type == EventType.USER_MESSAGE:
             msg_event = event  # type: UserMessageEvent
             self._emotion_inference.update_context(user_message=msg_event.message)
+            
+            if self.config.log_events:
+                soul_log.log_event_response(
+                    event_type="USER_MESSAGE",
+                    action_taken="updated emotion context",
+                    details={"msg_len": len(msg_event.message)},
+                )
         
         elif event.event_type == EventType.BOT_RESPONSE:
             resp_event = event  # type: BotResponseEvent
+            was_responding = self._state.is_responding
             self._state.is_responding = False
             self._emotion_inference.update_context(bot_response=resp_event.response)
+            
+            if self.config.log_events and was_responding:
+                soul_log.log_state_change("is_responding", True, False, reason="BOT_RESPONSE complete")
         
         elif event.event_type == EventType.BOT_STREAMING:
+            was_responding = self._state.is_responding
             self._state.is_responding = True
             stream_event = event  # type: BotStreamingEvent
-            # Could update emotion based on streaming content here
+            
+            if self.config.log_events and not was_responding:
+                soul_log.log_state_change("is_responding", False, True, reason="BOT_STREAMING started")
         
         elif event.event_type == EventType.FACE_DETECTED:
             face_event = event  # type: FaceDetectedEvent
@@ -332,16 +476,41 @@ class SoulLoop:
             # Wave at new faces
             if face_event.is_new_face and self.config.antenna_wave_on_face_detected:
                 await self._do_antenna_wave()
+                if self.config.log_decisions:
+                    soul_log.log_decision(
+                        decision_point="face_greeting",
+                        decision="antenna_wave",
+                        reason="new_face + antenna_wave_on_face_detected=True",
+                    )
             
             # Enable face tracking if configured
             if self.config.face_tracking_on_attention and not was_detected:
                 await self._set_face_tracking(True)
+                if self.config.log_decisions:
+                    soul_log.log_decision(
+                        decision_point="face_tracking",
+                        decision="enable",
+                        reason="face_detected + face_tracking_on_attention=True",
+                    )
+            
+            if self.config.log_events and not was_detected:
+                soul_log.log_state_change("face_detected", False, True, reason="FACE_DETECTED event")
         
         elif event.event_type == EventType.FACE_LOST:
+            was_detected = self._state.face_detected
             self._state.face_detected = False
             
             if self.config.face_tracking_on_attention:
                 await self._set_face_tracking(False)
+                if self.config.log_decisions:
+                    soul_log.log_decision(
+                        decision_point="face_tracking",
+                        decision="disable",
+                        reason="face_lost + face_tracking_on_attention=True",
+                    )
+            
+            if self.config.log_events and was_detected:
+                soul_log.log_state_change("face_detected", True, False, reason="FACE_LOST event")
         
         # Dispatch to registered handlers
         await self._event_queue.dispatch(event)
@@ -355,6 +524,9 @@ class SoulLoop:
             now - self._last_emotion_inference_time
         ) * 1000 >= self.config.emotion_inference_interval_ms
         
+        old_emotion = self._state.current_emotion
+        old_intensity = self._state.emotion_intensity
+        
         if should_infer:
             # Run async emotion inference
             result = await self._emotion_inference.infer()
@@ -366,6 +538,14 @@ class SoulLoop:
                 self._movement_blender.set_emotion(result.emotion, result.intensity)
                 self._state.current_emotion = result.emotion
                 self._state.emotion_intensity = result.intensity
+                
+                if self.config.log_emotions and result.emotion != old_emotion:
+                    soul_log.log_decision(
+                        decision_point="emotion_update",
+                        decision=f"{result.emotion}({result.intensity:.2f})",
+                        reason="LLM inference",
+                        context={"prev": f"{old_emotion}({old_intensity:.2f})"},
+                    )
         else:
             # Use fast rule-based inference for immediate reactions
             result = self._emotion_inference.infer_rule_based()
@@ -375,17 +555,29 @@ class SoulLoop:
                 self._movement_blender.set_emotion(result.emotion, result.intensity)
                 self._state.current_emotion = result.emotion
                 self._state.emotion_intensity = result.intensity
+                
+                if self.config.log_emotions:
+                    soul_log.log_decision(
+                        decision_point="emotion_update",
+                        decision=f"{result.emotion}({result.intensity:.2f})",
+                        reason="rule-based inference",
+                        context={"prev": f"{old_emotion}({old_intensity:.2f})"},
+                    )
     
     async def _send_movement(self):
         """Send current pose to Reachy."""
         pose_dict = self._movement_blender.to_reachy_command()
+        
+        # Log movement if enabled (throttled by default)
+        if self.config.log_movements:
+            soul_log.log_movement_command(pose_dict, throttle_ms=5000)
         
         # Callback for external handling
         if self._on_movement:
             try:
                 self._on_movement(pose_dict)
             except Exception as e:
-                logger.error(f"Movement callback error: {e}")
+                logger.error(f"[MOVEMENT] callback_error: {e}")
         
         # Direct service call if available
         if self._reachy_service:
@@ -395,7 +587,7 @@ class SoulLoop:
                     self._reachy_service.apply_soul_pose(pose_dict)
             except Exception as e:
                 if self.config.debug_logging:
-                    logger.debug(f"Could not send pose to Reachy: {e}")
+                    logger.debug(f"[MOVEMENT] send_failed: {e}")
     
     async def _do_antenna_wave(self):
         """Perform an antenna wave greeting."""

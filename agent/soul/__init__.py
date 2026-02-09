@@ -59,6 +59,12 @@ from agent.soul.personality import (
     reload_personality,
     set_personality_file,
 )
+from agent.soul.logging_utils import (
+    SoulLogger,
+    SoulLogCategory,
+    configure_soul_logging,
+    get_soul_logger,
+)
 
 __all__ = [
     # Main components
@@ -86,4 +92,9 @@ __all__ = [
     "BotStreamingEvent",
     "FaceDetectedEvent",
     "FaceLostEvent",
+    # Logging
+    "SoulLogger",
+    "SoulLogCategory",
+    "configure_soul_logging",
+    "get_soul_logger",
 ]
