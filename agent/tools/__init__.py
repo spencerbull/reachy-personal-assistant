@@ -6,13 +6,15 @@ Provides LangChain-compatible tools for:
 - Memory operations (spatial and long-term)
 - Image generation (ComfyUI)
 - MCP server integrations
+
+Note: express_emotion_tool was removed - emotions are now handled 
+automatically by the Soul System (agent/soul/).
 """
 
 from agent.tools.reachy_tools import (
     look_at_tool,
     turn_body_tool,
     enable_face_tracking_tool,
-    express_emotion_tool,
     get_all_reachy_tools,
 )
 
@@ -31,7 +33,6 @@ __all__ = [
     "look_at_tool",
     "turn_body_tool", 
     "enable_face_tracking_tool",
-    "express_emotion_tool",
     "get_all_reachy_tools",
     "remember_location_tool",
     "recall_location_tool",

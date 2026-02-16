@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "aiortc>=1.14.0",
     "onnxruntime>=1.23.2",
+    "python-dotenv>=1.0.0",
     "pipecat-ai-small-webrtc-prebuilt>=2.0.4",
     "pipecat-ai[daily,local-smart-turn-v3]>=0.0.98",
     "reachy-mini[mujoco]>=1.2.4",

@@ -15,6 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from agent.soul.config import SoulConfig
+from agent.soul.logging_utils import SoulLogger
 from agent.memory.emotional import (
     EmotionalState,
     EmotionExpression,
@@ -22,6 +23,7 @@ from agent.memory.emotional import (
 )
 
 logger = logging.getLogger(__name__)
+soul_log = SoulLogger("agent.soul.movement")
 
 
 @dataclass
@@ -159,9 +161,10 @@ class MovementBlender:
             blend_duration: Override blend duration (uses config default if None)
         """
         if emotion not in EMOTION_EXPRESSIONS:
-            logger.warning(f"Unknown emotion '{emotion}', using neutral")
+            logger.warning(f"[MOVEMENT] unknown_emotion: '{emotion}' → using neutral")
             emotion = "neutral"
         
+        old_emotion = self._current_emotion
         expression = EMOTION_EXPRESSIONS[emotion]
         intensity = max(0.0, min(1.0, intensity))
         
@@ -179,8 +182,16 @@ class MovementBlender:
         self._current_emotion = emotion
         self._emotion_intensity = intensity
         
+        # Log the blend start
+        if emotion != old_emotion:
+            soul_log.log_pose_blend_start(
+                target_emotion=emotion,
+                intensity=intensity,
+                duration_s=duration,
+            )
+        
         if self.config.debug_logging:
-            logger.debug(f"Blending to emotion: {emotion} ({intensity:.2f}) over {duration:.2f}s")
+            logger.debug(f"[MOVEMENT] blend_to: {emotion}({intensity:.2f}) over {duration:.2f}s from {old_emotion}")
     
     def _expression_to_pose(self, expression: EmotionExpression, intensity: float) -> Pose:
         """Convert emotion expression to pose, scaled by intensity."""
@@ -228,6 +239,7 @@ class MovementBlender:
                 # Blend complete
                 self._emotion_pose = self._blend_target.target_pose.copy()
                 self._blend_target = None
+                soul_log.log_pose_blend_complete(self._current_emotion)
         
         # Apply exponential smoothing to current pose
         self._current_pose = self._smooth_pose(

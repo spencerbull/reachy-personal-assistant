@@ -258,6 +258,9 @@ transport_params = {
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info(f"Starting bot")
+    
+    # Track LLM service for cleanup
+    llm = None
 
     async with aiohttp.ClientSession() as session:
 
@@ -401,6 +404,12 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             if LLM_BACKEND == "langgraph":
                 logger.info("Initializing MCP tools...")
                 await llm.initialize_mcp()
+                
+                # Start Soul System for continuous embodiment (emotion, movement, idle behaviors)
+                logger.info("Starting Soul System...")
+                reachy_service = ReachyService.get_instance()
+                llm.set_reachy_service(reachy_service)
+                await llm.start_soul()
 
             # Kick off the conversation.
             messages.append(
@@ -419,6 +428,11 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             logger.info(f"Client disconnected")
             await camera_processor.stop()
             
+            # Stop Soul System
+            if LLM_BACKEND == "langgraph":
+                logger.info("Stopping Soul System...")
+                await llm.stop_soul()
+            
             # Close MCP connections if using LangGraph
             if LLM_BACKEND == "langgraph" and hasattr(llm, '_mcp_loader') and llm._mcp_loader:
                 logger.info("Closing MCP connections...")
@@ -428,7 +442,29 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
 
         runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
 
-        await runner.run(task)
+        try:
+            await runner.run(task)
+        except asyncio.CancelledError:
+            logger.info("Pipeline cancelled, cleaning up...")
+            raise
+        finally:
+            # Ensure cleanup happens even on Ctrl+C
+            logger.info("Running cleanup handlers...")
+            
+            # Stop camera processor
+            try:
+                await camera_processor.stop()
+            except Exception as e:
+                logger.debug(f"Camera cleanup error: {e}")
+            
+            # Clean up LLM service (stops soul, closes MCP)
+            if LLM_BACKEND == "langgraph" and hasattr(llm, 'cleanup'):
+                try:
+                    await llm.cleanup()
+                except asyncio.CancelledError:
+                    logger.info("LLM cleanup cancelled")
+                except Exception as e:
+                    logger.warning(f"LLM cleanup error: {e}")
 
 
 async def bot(runner_args: RunnerArguments):

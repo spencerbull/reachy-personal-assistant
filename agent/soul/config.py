@@ -9,6 +9,17 @@ from typing import Optional
 
 
 @dataclass
+class PersonalityConfig:
+    """Configuration for personality loading."""
+    
+    soul_file_path: str = "REACHY_SOUL.md"
+    auto_reload: bool = False  # Reload personality on file change
+    reload_interval_s: float = 60.0  # How often to check for changes
+    use_personality_expressions: bool = True  # Use SOUL.md physical expressions
+    use_personality_prompts: bool = True  # Use SOUL.md for system prompts
+
+
+@dataclass
 class SoulConfig:
     """
     Configuration for the Reachy Soul System.
@@ -49,28 +60,34 @@ class SoulConfig:
     """
     
     # Polling / Loop timing
+    # NOTE: Poll interval affects responsiveness of emotion/behavior changes
+    # Keep fast (200ms) for quick reactions, emotion inference runs separately
     poll_interval_ms: int = 200
-    emotion_inference_interval_ms: int = 1000  # Don't run LLM every loop
+    emotion_inference_interval_ms: int = 2000  # LLM inference every 2s (expensive)
     
-    # Model configuration (same as main agent by default)
+    # Model configuration (use VLM for emotion inference)
     soul_model_url: str = "http://localhost:8002/v1"
     soul_model_name: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
     soul_model_temperature: float = 0.3  # Lower for consistent emotion inference
     soul_model_max_tokens: int = 100  # Small response for emotion JSON
     
     # Idle behavior - Breathing
-    idle_breathing_enabled: bool = True
+    # NOTE: Disabled because MovementManager has its own BreathingMove
+    # that handles breathing animations. Enabling this would cause conflicts.
+    idle_breathing_enabled: bool = False
     idle_breathing_frequency_hz: float = 0.15  # ~9 breaths per minute (relaxed)
     idle_breathing_amplitude: float = 0.003  # 3mm subtle movement
-    
+
     # Idle behavior - Micro movements
-    idle_micro_movements_enabled: bool = True
+    # NOTE: Disabled - let MovementManager handle idle behaviors
+    idle_micro_movements_enabled: bool = False
     idle_micro_movement_amplitude: float = 0.02  # ~1 degree subtle shifts
     idle_micro_movement_frequency_hz: float = 0.1  # Every ~10 seconds
-    
+
     # Idle behavior - Scanning
+    # Soul-driven room scanning when idle
     idle_scanning_enabled: bool = True
-    idle_scan_interval_s: float = 30.0  # Scan room every 30s when idle
+    idle_scan_interval_s: float = 45.0  # Scan room every 45s when idle
     
     # Movement blending
     movement_blend_duration_s: float = 0.5  # 500ms transitions
@@ -90,23 +107,53 @@ class SoulConfig:
     face_tracking_on_attention: bool = True
     antenna_wave_on_face_detected: bool = True
     
-    # Debug
+    # Personality
+    personality: PersonalityConfig = field(default_factory=PersonalityConfig)
+    
+    # Logging Configuration
+    # debug_logging: Enable verbose debug output for all soul components
+    # log_level: Overall log level ("DEBUG", "INFO", "WARNING", "ERROR")
+    # log_emotions: Log emotion inference and changes
+    # log_events: Log soul event processing  
+    # log_decisions: Log decision points and reasoning
+    # log_movements: Log pose/movement updates (can be noisy)
+    # log_status_interval_s: How often to log status summary (0 to disable)
     debug_logging: bool = False
+    log_level: str = "INFO"
+    log_emotions: bool = True
+    log_events: bool = True
+    log_decisions: bool = True
+    log_movements: bool = False  # Can be very noisy
+    log_status_interval_s: float = 30.0  # Status summary every 30s
     
     @classmethod
     def from_env(cls) -> "SoulConfig":
         """Create config from environment variables."""
         import os
         
+        personality = PersonalityConfig(
+            soul_file_path=os.getenv("SOUL_FILE_PATH", "REACHY_SOUL.md"),
+            auto_reload=os.getenv("SOUL_AUTO_RELOAD", "false").lower() == "true",
+            use_personality_expressions=os.getenv("SOUL_USE_PERSONALITY_EXPRESSIONS", "true").lower() == "true",
+            use_personality_prompts=os.getenv("SOUL_USE_PERSONALITY_PROMPTS", "true").lower() == "true",
+        )
+        
         return cls(
             poll_interval_ms=int(os.getenv("SOUL_POLL_INTERVAL_MS", "200")),
-            emotion_inference_interval_ms=int(os.getenv("SOUL_EMOTION_INFERENCE_INTERVAL_MS", "1000")),
+            emotion_inference_interval_ms=int(os.getenv("SOUL_EMOTION_INFERENCE_INTERVAL_MS", "2000")),
             soul_model_url=os.getenv("SOUL_MODEL_URL", "http://localhost:8002/v1"),
             soul_model_name=os.getenv("SOUL_MODEL_NAME", "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"),
             idle_breathing_enabled=os.getenv("SOUL_IDLE_BREATHING", "true").lower() == "true",
             idle_micro_movements_enabled=os.getenv("SOUL_IDLE_MICRO_MOVEMENTS", "true").lower() == "true",
             idle_scanning_enabled=os.getenv("SOUL_IDLE_SCANNING", "true").lower() == "true",
+            personality=personality,
             debug_logging=os.getenv("SOUL_DEBUG", "false").lower() == "true",
+            log_level=os.getenv("SOUL_LOG_LEVEL", "INFO").upper(),
+            log_emotions=os.getenv("SOUL_LOG_EMOTIONS", "true").lower() == "true",
+            log_events=os.getenv("SOUL_LOG_EVENTS", "true").lower() == "true",
+            log_decisions=os.getenv("SOUL_LOG_DECISIONS", "true").lower() == "true",
+            log_movements=os.getenv("SOUL_LOG_MOVEMENTS", "false").lower() == "true",
+            log_status_interval_s=float(os.getenv("SOUL_LOG_STATUS_INTERVAL_S", "30.0")),
         )
     
     def to_dict(self) -> dict:
@@ -120,4 +167,19 @@ class SoulConfig:
             "idle_micro_movements_enabled": self.idle_micro_movements_enabled,
             "idle_scanning_enabled": self.idle_scanning_enabled,
             "movement_blend_duration_s": self.movement_blend_duration_s,
+            "personality": {
+                "soul_file_path": self.personality.soul_file_path,
+                "auto_reload": self.personality.auto_reload,
+                "use_personality_expressions": self.personality.use_personality_expressions,
+                "use_personality_prompts": self.personality.use_personality_prompts,
+            },
+            "logging": {
+                "debug_logging": self.debug_logging,
+                "log_level": self.log_level,
+                "log_emotions": self.log_emotions,
+                "log_events": self.log_events,
+                "log_decisions": self.log_decisions,
+                "log_movements": self.log_movements,
+                "log_status_interval_s": self.log_status_interval_s,
+            },
         }

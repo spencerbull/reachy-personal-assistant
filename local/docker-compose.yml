@@ -1,14 +1,31 @@
-# vLLM Local Model Servers for Reachy Personal Assistant
+# Reachy Personal Assistant - Full Docker Stack
+#
+# Services:
+#   - agent-llm: Main VLM (Qwen3-VL-30B) for conversation + soul inference
+#   - routing-llm: Fast router model (Phi-3-mini) for intent classification
+#   - bot: Pipecat pipeline with LangGraph agent and Soul System
+#
+# The Reachy daemon runs on the HOST (not in Docker) for hardware access.
+# Bot container connects to daemon via host.docker.internal.
+#
+# Usage:
+#   1. Start daemon on host: ./start_daemon.sh
+#   2. Start stack: docker compose up -d
+#   3. Connect via Daily room URL
+#
+# Hardware Requirements:
+#   - NVIDIA GPU with 80GB+ VRAM (for both LLMs)
+#   - Or use GB10 with unified memory
 #
 # NOTE: The NVIDIA vLLM container version must match your driver version.
 # Check your driver with: nvidia-smi
 # - Driver 590.44+ -> use vllm:25.12-py3
 # - Driver 580.x   -> use vllm:25.04-py3 or earlier
-# - Driver 570.x   -> use vllm:25.01-py3 or earlier
-#
-# Current system: Driver 580.105.08 -> using vllm:25.04-py3
 
 services:
+  # ============================================
+  # Main Agent LLM (Qwen3-VL-30B)
+  # ============================================
   agent-llm:
     image: nvcr.io/nvidia/vllm:25.12-py3
     container_name: agent-llm
@@ -24,16 +41,14 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
     ports:
       - "8002:8000"
-    # Agent: Qwen3 30B Vision with tool calling support
-    # For 30B model, ensure driver 590+ and sufficient GPU memory
     command: >
       vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
       --port 8000 
       --host 0.0.0.0 
-      --gpu-memory-utilization 0.6
+      --gpu-memory-utilization 0.7
       --max-model-len 64000
       --trust-remote-code
-      --max-num-seqs 1
+      --max-num-seqs 4
       --enable-auto-tool-choice
       --tool-call-parser hermes
       --enable-prefix-caching
@@ -50,7 +65,12 @@ services:
       timeout: 10s
       retries: 60
       start_period: 120s
+    networks:
+      - reachy-net
 
+  # ============================================
+  # Router LLM (Phi-3-mini for fast routing)
+  # ============================================
   routing-llm:
     image: nvcr.io/nvidia/vllm:25.12-py3
     container_name: routing-llm
@@ -66,7 +86,6 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
     ports:
       - "8003:8000"
-    # Router: Small model for fast routing decisions
     command: >
       vllm serve microsoft/Phi-3-mini-4k-instruct
       --port 8000 
@@ -91,3 +110,56 @@ services:
     depends_on:
       agent-llm:
         condition: service_healthy
+    networks:
+      - reachy-net
+
+  # ============================================
+  # Bot Service (Pipecat + LangGraph + Soul)
+  # ============================================
+  #  bot:
+  #  build:
+  #    context: ..
+  #    dockerfile: Dockerfile
+  #  container_name: reachy-bot
+  #  environment:
+  #    # LLM Configuration
+  #    - LLM_BACKEND=langgraph
+  #    - MAIN_MODEL_URL=http://agent-llm:8000/v1
+  #    - ROUTER_MODEL_URL=http://routing-llm:8000/v1
+  #    # Soul System
+  #    - SOUL_FILE_PATH=/app/REACHY_SOUL.md
+  #    - SOUL_POLL_INTERVAL_MS=${SOUL_POLL_INTERVAL_MS:-200}
+  #    - SOUL_ENABLE_IDLE=${SOUL_ENABLE_IDLE:-true}
+  #    - SOUL_DEBUG_LOGGING=${SOUL_DEBUG_LOGGING:-false}
+  #    # Reachy Daemon (runs on host)
+  #    - REACHY_DAEMON_HOST=host.docker.internal
+  #    # External APIs (from .env)
+  #    - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+  #    - DAILY_API_KEY=${DAILY_API_KEY}
+  #    - DAILY_ROOM_URL=${DAILY_ROOM_URL}
+  #    # Optional APIs
+  #    - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+  #    - GOOGLE_OAUTH_TOKEN=${GOOGLE_OAUTH_TOKEN:-}
+  #    - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+  #  ports:
+  #    - "7860:7860"
+  #  extra_hosts:
+  #    - "host.docker.internal:host-gateway"
+  #  depends_on:
+  #    agent-llm:
+  #      condition: service_healthy
+  #    routing-llm:
+  #      condition: service_healthy
+  #  healthcheck:
+  #    test: ["CMD-SHELL", "curl -f http://localhost:7860/health || exit 1"]
+  #    interval: 30s
+  #    timeout: 10s
+  #    retries: 3
+  #    start_period: 30s
+  #  restart: unless-stopped
+  #  networks:
+  #    - reachy-net
+  
+networks:
+  reachy-net:
+    driver: bridge

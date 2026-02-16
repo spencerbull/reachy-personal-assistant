@@ -175,6 +175,7 @@ class MovementState:
     last_activity_time: float = 0.0
 
     # Secondary move state (offsets)
+    # Format: (x, y, z, roll, pitch, yaw) - meters for translation, radians for rotation
     speech_offsets: Tuple[float, float, float, float, float, float] = (
         0.0,
         0.0,
@@ -191,6 +192,17 @@ class MovementState:
         0.0,
         0.0,
     )
+    # Soul emotion offsets from the Soul System (emotion-driven head positions)
+    soul_offsets: Tuple[float, float, float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    # Soul antenna offsets (separate from head because antennas use different blend)
+    soul_antenna_offsets: Tuple[float, float] = (0.0, 0.0)
 
     # Status flags
     last_primary_pose: FullBodyPose | None = None
@@ -306,6 +318,19 @@ class MovementManager:
         )
         self._face_offsets_dirty = False
 
+        # Soul emotion offsets (from Soul System for emotion-driven movement)
+        self._soul_offsets_lock = threading.Lock()
+        self._pending_soul_offsets: Tuple[float, float, float, float, float, float] = (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        self._pending_soul_antenna_offsets: Tuple[float, float] = (0.0, 0.0)
+        self._soul_offsets_dirty = False
+
         self._shared_state_lock = threading.Lock()
         self._shared_last_activity_time = self.state.last_activity_time
         self._shared_is_listening = self._is_listening
@@ -346,6 +371,22 @@ class MovementManager:
         """
         self._command_queue.put(("set_moving_state", duration))
 
+    def set_soul_offsets(
+        self,
+        head_offsets: Tuple[float, float, float, float, float, float],
+        antenna_offsets: Tuple[float, float],
+    ) -> None:
+        """Update soul-driven secondary offsets for emotion/behavior poses.
+
+        Head offsets are (x, y, z, roll, pitch, yaw) in metres and radians.
+        Antenna offsets are (left, right) in radians.
+        Thread-safe via a pending snapshot.
+        """
+        with self._soul_offsets_lock:
+            self._pending_soul_offsets = head_offsets
+            self._pending_soul_antenna_offsets = antenna_offsets
+            self._soul_offsets_dirty = True
+
     def is_idle(self) -> bool:
         """Return True when the robot has been inactive longer than the idle delay."""
         with self._shared_state_lock:
@@ -384,7 +425,7 @@ class MovementManager:
             self._handle_command(command, payload, current_time)
 
     def _apply_pending_offsets(self) -> None:
-        """Apply the most recent speech/face offset updates."""
+        """Apply the most recent speech/face/soul offset updates."""
         speech_offsets: Tuple[float, float, float, float, float, float] | None = None
         with self._speech_offsets_lock:
             if self._speech_offsets_dirty:
@@ -404,6 +445,20 @@ class MovementManager:
         if face_offsets is not None:
             self.state.face_tracking_offsets = face_offsets
             self.state.update_activity()
+
+        # Apply soul emotion offsets
+        soul_offsets: Tuple[float, float, float, float, float, float] | None = None
+        soul_antenna_offsets: Tuple[float, float] | None = None
+        with self._soul_offsets_lock:
+            if self._soul_offsets_dirty:
+                soul_offsets = self._pending_soul_offsets
+                soul_antenna_offsets = self._pending_soul_antenna_offsets
+                self._soul_offsets_dirty = False
+
+        if soul_offsets is not None:
+            self.state.soul_offsets = soul_offsets
+            self.state.soul_antenna_offsets = soul_antenna_offsets or (0.0, 0.0)
+            # Soul offsets don't trigger activity - they're background emotion state
 
     def _handle_command(self, command: str, payload: Any, current_time: float) -> None:
         """Handle a single cross-thread command."""
@@ -562,15 +617,17 @@ class MovementManager:
         return primary_full_body_pose
 
     def _get_secondary_pose(self) -> FullBodyPose:
-        """Get the secondary full body pose from speech and face tracking offsets."""
-        # Combine speech sway offsets + face tracking offsets for secondary pose
+        """Get the secondary full body pose from speech, face tracking, and soul offsets."""
+        # Combine speech sway + face tracking + soul emotion offsets
+        # Soul offsets are applied at reduced weight to avoid overwhelming other behaviors
+        soul_weight = 0.6  # Soul emotion poses blend at 60%
         secondary_offsets = [
-            self.state.speech_offsets[0] + self.state.face_tracking_offsets[0],
-            self.state.speech_offsets[1] + self.state.face_tracking_offsets[1],
-            self.state.speech_offsets[2] + self.state.face_tracking_offsets[2],
-            self.state.speech_offsets[3] + self.state.face_tracking_offsets[3],
-            self.state.speech_offsets[4] + self.state.face_tracking_offsets[4],
-            self.state.speech_offsets[5] + self.state.face_tracking_offsets[5],
+            self.state.speech_offsets[0] + self.state.face_tracking_offsets[0] + self.state.soul_offsets[0] * soul_weight,
+            self.state.speech_offsets[1] + self.state.face_tracking_offsets[1] + self.state.soul_offsets[1] * soul_weight,
+            self.state.speech_offsets[2] + self.state.face_tracking_offsets[2] + self.state.soul_offsets[2] * soul_weight,
+            self.state.speech_offsets[3] + self.state.face_tracking_offsets[3] + self.state.soul_offsets[3] * soul_weight,
+            self.state.speech_offsets[4] + self.state.face_tracking_offsets[4] + self.state.soul_offsets[4] * soul_weight,
+            self.state.speech_offsets[5] + self.state.face_tracking_offsets[5] + self.state.soul_offsets[5] * soul_weight,
         ]
 
         secondary_head_pose = create_head_pose(
@@ -583,23 +640,29 @@ class MovementManager:
             degrees=False,
             mm=False,
         )
-        
-        # Add continuous antenna wiggle when face tracking is active
-        # This gives the impression Reachy is attentively listening
-        antenna_offsets = (0.0, 0.0)
+
+        # Combine antenna offsets from face tracking and soul
         face_tracking_active = (
             abs(self.state.face_tracking_offsets[4]) > 0.001 or  # pitch
             abs(self.state.face_tracking_offsets[5]) > 0.001     # yaw
         )
-        
+
+        antenna_offsets = (
+            self.state.soul_antenna_offsets[0] * soul_weight,
+            self.state.soul_antenna_offsets[1] * soul_weight,
+        )
+
         if face_tracking_active:
-            # Gentle antenna wiggle - both antennas move opposite directions
+            # Gentle antenna wiggle when face tracking - both antennas move opposite directions
             wiggle_amplitude = np.deg2rad(12)  # 12 degrees
             wiggle_frequency = 0.6  # Hz - gentle sway
             t = self._now()
             wiggle = wiggle_amplitude * np.sin(2 * np.pi * wiggle_frequency * t)
-            antenna_offsets = (wiggle, -wiggle)  # Opposite directions
-        
+            antenna_offsets = (
+                antenna_offsets[0] + wiggle,
+                antenna_offsets[1] - wiggle,  # Opposite directions
+            )
+
         return (secondary_head_pose, antenna_offsets, 0.0)
 
     def _compose_full_body_pose(self, current_time: float) -> FullBodyPose:

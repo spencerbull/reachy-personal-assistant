@@ -6,18 +6,21 @@ The Soul System provides Reachy with continuous physical presence by:
 2. Inferring emotional state from conversation context
 3. Generating smooth movement transitions between emotional states
 4. Adding idle behaviors (breathing, micro-movements) for lifelike presence
+5. Loading personality from REACHY_SOUL.md for consistent character
 
 Key Components:
 - SoulLoop: Main async loop that coordinates everything
 - EmotionInference: LLM-based emotion detection from conversation
 - MovementBlender: Smooth interpolation between poses
 - IdleGenerator: Breathing, micro-movements, subtle life
+- Personality: Character traits and expression guidelines from SOUL.md
 
 Usage:
-    from agent.soul import SoulLoop, SoulConfig
+    from agent.soul import SoulLoop, SoulConfig, Personality
     
     config = SoulConfig()
-    soul = SoulLoop(config, reachy_service)
+    personality = Personality.load("REACHY_SOUL.md")
+    soul = SoulLoop(config, reachy_service, personality=personality)
     
     # Start the soul (runs in background)
     await soul.start()
@@ -31,7 +34,7 @@ Usage:
     await soul.stop()
 """
 
-from agent.soul.config import SoulConfig
+from agent.soul.config import SoulConfig, PersonalityConfig
 from agent.soul.loop import SoulLoop
 from agent.soul.events import (
     SoulEvent,
@@ -46,14 +49,40 @@ from agent.soul.events import (
 from agent.soul.emotion_inference import EmotionInference
 from agent.soul.movement_blender import MovementBlender
 from agent.soul.idle_generator import IdleGenerator
+from agent.soul.personality import (
+    Personality,
+    PersonalityTraits,
+    PhysicalExpression,
+    ConversationalStyle,
+    EmbodimentPrinciples,
+    get_personality,
+    reload_personality,
+    set_personality_file,
+)
+from agent.soul.logging_utils import (
+    SoulLogger,
+    SoulLogCategory,
+    configure_soul_logging,
+    get_soul_logger,
+)
 
 __all__ = [
     # Main components
     "SoulConfig",
+    "PersonalityConfig",
     "SoulLoop",
     "EmotionInference",
     "MovementBlender",
     "IdleGenerator",
+    # Personality
+    "Personality",
+    "PersonalityTraits",
+    "PhysicalExpression",
+    "ConversationalStyle",
+    "EmbodimentPrinciples",
+    "get_personality",
+    "reload_personality",
+    "set_personality_file",
     # Events
     "SoulEvent",
     "UserSpeakingEvent",
@@ -63,4 +92,9 @@ __all__ = [
     "BotStreamingEvent",
     "FaceDetectedEvent",
     "FaceLostEvent",
+    # Logging
+    "SoulLogger",
+    "SoulLogCategory",
+    "configure_soul_logging",
+    "get_soul_logger",
 ]

@@ -6,8 +6,14 @@ and agent behavior settings.
 """
 
 import os
+import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent.soul.personality import Personality
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -103,6 +109,10 @@ class AgentConfig:
     # Agent behavior
     system_prompt: str = field(default_factory=lambda: DEFAULT_SYSTEM_PROMPT)
     
+    # Personality / Soul
+    soul_file_path: str = "REACHY_SOUL.md"
+    use_personality_prompt: bool = True  # Include personality in system prompt
+    
     # Memory settings
     enable_spatial_memory: bool = True
     enable_long_term_memory: bool = True
@@ -111,6 +121,42 @@ class AgentConfig:
     # Checkpointing
     checkpoint_backend: str = "memory"  # "memory", "postgres", "sqlite"
     postgres_uri: Optional[str] = None
+    
+    # Cached personality (lazily loaded)
+    _personality: Optional["Personality"] = field(default=None, repr=False)
+    
+    def get_personality(self) -> Optional["Personality"]:
+        """Get the loaded personality, loading if necessary."""
+        if self._personality is None and self.use_personality_prompt:
+            try:
+                from agent.soul.personality import Personality
+                self._personality = Personality.load(self.soul_file_path)
+                if self._personality.is_loaded():
+                    logger.info(f"Loaded personality: {self._personality.name}")
+            except Exception as e:
+                logger.warning(f"Failed to load personality: {e}")
+        return self._personality
+    
+    def get_full_system_prompt(self) -> str:
+        """
+        Get the full system prompt including personality additions.
+        
+        Returns:
+            Complete system prompt with personality context
+        """
+        base_prompt = self.system_prompt
+        
+        if not self.use_personality_prompt:
+            return base_prompt
+        
+        personality = self.get_personality()
+        if personality and personality.is_loaded():
+            personality_addition = personality.generate_system_prompt_addition()
+            if personality_addition:
+                # Insert personality context after the identity block
+                return f"{base_prompt}\n\n{personality_addition}"
+        
+        return base_prompt
     
     @classmethod
     def from_env(cls) -> "AgentConfig":
@@ -129,6 +175,10 @@ class AgentConfig:
         if os.getenv("POSTGRES_URI"):
             config.checkpoint_backend = "postgres"
             config.postgres_uri = os.getenv("POSTGRES_URI")
+        if os.getenv("SOUL_FILE_PATH"):
+            config.soul_file_path = os.getenv("SOUL_FILE_PATH")
+        if os.getenv("USE_PERSONALITY_PROMPT"):
+            config.use_personality_prompt = os.getenv("USE_PERSONALITY_PROMPT", "true").lower() == "true"
             
         return config
 
