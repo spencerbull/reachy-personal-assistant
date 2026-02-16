@@ -35,6 +35,7 @@ from __future__ import annotations
 import time
 import logging
 import threading
+from enum import Enum
 from queue import Empty, Queue
 from typing import Any, Dict, Tuple
 from collections import deque
@@ -58,7 +59,52 @@ logger = logging.getLogger(__name__)
 CONTROL_LOOP_FREQUENCY_HZ = 100.0  # Hz - Target frequency for the movement control loop
 
 # Type definitions
-FullBodyPose = Tuple[NDArray[np.float32], Tuple[float, float], float]  # (head_pose_4x4, antennas, body_yaw)
+FullBodyPose = Tuple[
+    NDArray[np.float32], Tuple[float, float], float
+]  # (head_pose_4x4, antennas, body_yaw)
+
+# Secondary offset weight tuple: (soul_head, soul_antenna, face_tracking, speech)
+ModeWeights = Tuple[float, float, float, float]
+
+
+class MovementMode(Enum):
+    """Robot movement modes that control how secondary offset sources are weighted.
+
+    Each mode assigns different weights to the four secondary offset producers:
+    - soul_head:      Soul emotion-driven head poses (pitch, yaw, roll, etc.)
+    - soul_antenna:   Soul emotion-driven antenna positions
+    - face_tracking:  Camera face-following head offsets
+    - speech:         Audio-driven speech wobble/sway
+
+    Modes transition smoothly via configurable blend duration.
+    """
+
+    IDLE = (
+        "idle"  # Nothing happening — soul emotions at full, breathing runs as primary
+    )
+    LISTENING = "listening"  # User is speaking — face tracking dominant, soul reduced
+    PROCESSING = (
+        "processing"  # LLM is thinking — soul shows thinking pose, face tracking medium
+    )
+    SPEAKING = "speaking"  # Bot is talking — speech wobble dominant, soul minimal
+    SCANNING = "scanning"  # Soul room scan — soul controls head, everything else off
+
+
+# Default mode weight table: (soul_head, soul_antenna, face_tracking, speech)
+# These can be overridden via SoulConfig or environment variables.
+DEFAULT_MODE_WEIGHTS: Dict[MovementMode, ModeWeights] = {
+    MovementMode.IDLE: (1.0, 1.0, 0.0, 0.0),
+    MovementMode.LISTENING: (0.3, 0.5, 1.0, 0.0),
+    MovementMode.PROCESSING: (0.8, 0.8, 0.6, 0.0),
+    MovementMode.SPEAKING: (0.2, 0.3, 0.4, 1.0),
+    MovementMode.SCANNING: (0.0, 0.5, 0.0, 0.0),
+}
+
+# Output clamping for combined secondary offsets (radians/meters)
+_MAX_SECONDARY_PITCH = 0.5  # ~30 degrees
+_MAX_SECONDARY_YAW = 0.8  # ~45 degrees
+_MAX_SECONDARY_ROLL = 0.3  # ~17 degrees
+_MAX_ANTENNA_OFFSET = 0.5  # ~28 degrees
 
 
 class BreathingMove(Move):  # type: ignore
@@ -97,7 +143,9 @@ class BreathingMove(Move):  # type: ignore
         """Duration property required by official Move interface."""
         return float("inf")  # Continuous breathing (never ends naturally)
 
-    def evaluate(self, t: float) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
+    def evaluate(
+        self, t: float
+    ) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None, float | None]:
         """Evaluate breathing move at time t."""
         if t < self.interpolation_duration:
             # Phase 1: Interpolate to neutral base position
@@ -105,13 +153,16 @@ class BreathingMove(Move):  # type: ignore
 
             # Interpolate head pose
             head_pose = linear_pose_interpolation(
-                self.interpolation_start_pose, self.neutral_head_pose, interpolation_t,
+                self.interpolation_start_pose,
+                self.neutral_head_pose,
+                interpolation_t,
             )
 
             # Interpolate antennas
             antennas_interp = (
-                1 - interpolation_t
-            ) * self.interpolation_start_antennas + interpolation_t * self.neutral_antennas
+                (1 - interpolation_t) * self.interpolation_start_antennas
+                + interpolation_t * self.neutral_antennas
+            )
             antennas = antennas_interp.astype(np.float64)
 
         else:
@@ -119,18 +170,26 @@ class BreathingMove(Move):  # type: ignore
             breathing_time = t - self.interpolation_duration
 
             # Gentle z-axis breathing
-            z_offset = self.breathing_z_amplitude * np.sin(2 * np.pi * self.breathing_frequency * breathing_time)
-            head_pose = create_head_pose(x=0, y=0, z=z_offset, roll=0, pitch=0, yaw=0, degrees=True, mm=False)
+            z_offset = self.breathing_z_amplitude * np.sin(
+                2 * np.pi * self.breathing_frequency * breathing_time
+            )
+            head_pose = create_head_pose(
+                x=0, y=0, z=z_offset, roll=0, pitch=0, yaw=0, degrees=True, mm=False
+            )
 
             # Antenna sway (opposite directions)
-            antenna_sway = self.antenna_sway_amplitude * np.sin(2 * np.pi * self.antenna_frequency * breathing_time)
+            antenna_sway = self.antenna_sway_amplitude * np.sin(
+                2 * np.pi * self.antenna_frequency * breathing_time
+            )
             antennas = np.array([antenna_sway, -antenna_sway], dtype=np.float64)
 
         # Return in official Move interface format: (head_pose, antennas_array, body_yaw)
         return (head_pose, antennas, 0.0)
 
 
-def combine_full_body(primary_pose: FullBodyPose, secondary_pose: FullBodyPose) -> FullBodyPose:
+def combine_full_body(
+    primary_pose: FullBodyPose, secondary_pose: FullBodyPose
+) -> FullBodyPose:
     """Combine primary and secondary full body poses.
 
     Args:
@@ -147,7 +206,9 @@ def combine_full_body(primary_pose: FullBodyPose, secondary_pose: FullBodyPose) 
     # Combine head poses using compose_world_offset; the secondary pose must be an
     # offset expressed in the world frame (T_off_world) applied to the absolute
     # primary transform (T_abs).
-    combined_head = compose_world_offset(primary_head, secondary_head, reorthonormalize=True)
+    combined_head = compose_world_offset(
+        primary_head, secondary_head, reorthonormalize=True
+    )
 
     # Sum antennas and body_yaw
     combined_antennas = (
@@ -282,7 +343,9 @@ class MovementManager:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._is_listening = False
-        self._last_commanded_pose: FullBodyPose = clone_full_body_pose(self.state.last_primary_pose)
+        self._last_commanded_pose: FullBodyPose = clone_full_body_pose(
+            self.state.last_primary_pose
+        )
         self._listening_antennas: Tuple[float, float] = self._last_commanded_pose[1]
         self._antenna_unfreeze_blend = 1.0
         self._antenna_blend_duration = 0.4  # seconds to blend back after listening
@@ -297,7 +360,9 @@ class MovementManager:
         # Cross-thread signalling
         self._command_queue: "Queue[Tuple[str, Any]]" = Queue()
         self._speech_offsets_lock = threading.Lock()
-        self._pending_speech_offsets: Tuple[float, float, float, float, float, float] = (
+        self._pending_speech_offsets: Tuple[
+            float, float, float, float, float, float
+        ] = (
             0.0,
             0.0,
             0.0,
@@ -338,6 +403,17 @@ class MovementManager:
         self._freq_stats = LoopFrequencyStats()
         self._freq_snapshot = LoopFrequencyStats()
 
+        # Movement mode system — controls per-source weights for secondary offsets
+        self._current_mode = MovementMode.IDLE
+        self._target_mode = MovementMode.IDLE
+        self._mode_blend_progress = 1.0  # 1.0 = fully arrived at target mode
+        self._mode_blend_duration = 0.3  # seconds for smooth mode transitions
+        self._current_weights: ModeWeights = DEFAULT_MODE_WEIGHTS[MovementMode.IDLE]
+        self._target_weights: ModeWeights = DEFAULT_MODE_WEIGHTS[MovementMode.IDLE]
+        self._mode_weights_table: Dict[MovementMode, ModeWeights] = dict(
+            DEFAULT_MODE_WEIGHTS
+        )
+
     def queue_move(self, move: Move) -> None:
         """Queue a primary move to run after the currently executing one.
 
@@ -353,7 +429,9 @@ class MovementManager:
         """
         self._command_queue.put(("clear_queue", None))
 
-    def set_speech_offsets(self, offsets: Tuple[float, float, float, float, float, float]) -> None:
+    def set_speech_offsets(
+        self, offsets: Tuple[float, float, float, float, float, float]
+    ) -> None:
         """Update speech-induced secondary offsets (x, y, z, roll, pitch, yaw).
 
         Offsets are interpreted as metres for translation and radians for
@@ -398,6 +476,32 @@ class MovementManager:
 
         return self._now() - last_activity >= self.idle_inactivity_delay
 
+    def set_mode(self, mode: MovementMode) -> None:
+        """Set the movement mode, controlling how secondary offsets are weighted.
+
+        Mode transitions are blended smoothly over ``mode_transition_blend_s``.
+        Thread-safe: the change is posted to the worker command queue.
+        """
+        self._command_queue.put(("set_mode", mode))
+
+    def configure_mode_weights(
+        self,
+        weights_table: Dict[MovementMode, ModeWeights] | None = None,
+        blend_duration: float | None = None,
+    ) -> None:
+        """Update mode weight table and/or blend duration at runtime.
+
+        Can be called from any thread; applied atomically.
+
+        Args:
+            weights_table: Full or partial mode weight overrides.
+            blend_duration: New mode transition blend duration in seconds.
+        """
+        if weights_table is not None:
+            self._mode_weights_table.update(weights_table)
+        if blend_duration is not None:
+            self._mode_blend_duration = blend_duration
+
     def set_listening(self, listening: bool) -> None:
         """Enable or disable listening mode without touching shared state directly.
 
@@ -414,8 +518,9 @@ class MovementManager:
         self._command_queue.put(("set_listening", listening))
 
     def _poll_signals(self, current_time: float) -> None:
-        """Apply queued commands and pending offset updates."""
+        """Apply queued commands, pending offset updates, and advance mode blend."""
         self._apply_pending_offsets()
+        self._advance_mode_blend(current_time)
 
         while True:
             try:
@@ -423,6 +528,38 @@ class MovementManager:
             except Empty:
                 break
             self._handle_command(command, payload, current_time)
+
+    def _advance_mode_blend(self, current_time: float) -> None:
+        """Advance the smooth transition between movement modes."""
+        if self._mode_blend_progress >= 1.0:
+            return  # Already at target
+
+        dt = self.target_period  # Approximate dt from loop frequency
+        if self._mode_blend_duration > 0:
+            self._mode_blend_progress = min(
+                1.0,
+                self._mode_blend_progress + dt / self._mode_blend_duration,
+            )
+        else:
+            self._mode_blend_progress = 1.0
+
+        # Smoothstep easing: 3t^2 - 2t^3
+        t = self._mode_blend_progress
+        eased = t * t * (3.0 - 2.0 * t)
+
+        # Interpolate weights
+        cw = self._current_weights
+        tw = self._target_weights
+        self._current_weights = (
+            cw[0] + (tw[0] - cw[0]) * eased,
+            cw[1] + (tw[1] - cw[1]) * eased,
+            cw[2] + (tw[2] - cw[2]) * eased,
+            cw[3] + (tw[3] - cw[3]) * eased,
+        )
+
+        if self._mode_blend_progress >= 1.0:
+            self._current_mode = self._target_mode
+            self._current_weights = self._target_weights
 
     def _apply_pending_offsets(self) -> None:
         """Apply the most recent speech/face/soul offset updates."""
@@ -480,7 +617,9 @@ class MovementManager:
                     len(self.move_queue),
                 )
             else:
-                logger.warning("Ignored queue_move command with invalid payload: %s", payload)
+                logger.warning(
+                    "Ignored queue_move command with invalid payload: %s", payload
+                )
         elif command == "clear_queue":
             self.move_queue.clear()
             self.state.current_move = None
@@ -496,6 +635,20 @@ class MovementManager:
             self.state.update_activity()
         elif command == "mark_activity":
             self.state.update_activity()
+        elif command == "set_mode":
+            if isinstance(payload, MovementMode) and payload != self._current_mode:
+                old_mode = self._current_mode
+                self._target_mode = payload
+                self._target_weights = self._mode_weights_table.get(
+                    payload, DEFAULT_MODE_WEIGHTS[MovementMode.IDLE]
+                )
+                self._mode_blend_progress = 0.0
+                logger.debug(
+                    "Mode transition: %s -> %s (blend %.2fs)",
+                    old_mode.value,
+                    payload.value,
+                    self._mode_blend_duration,
+                )
         elif command == "set_listening":
             desired_state = bool(payload)
             now = self._now()
@@ -532,7 +685,8 @@ class MovementManager:
         """Manage the primary move queue (sequential execution)."""
         if self.state.current_move is None or (
             self.state.move_start_time is not None
-            and current_time - self.state.move_start_time >= self.state.current_move.duration
+            and current_time - self.state.move_start_time
+            >= self.state.current_move.duration
         ):
             self.state.current_move = None
             self.state.move_start_time = None
@@ -541,8 +695,12 @@ class MovementManager:
                 self.state.current_move = self.move_queue.popleft()
                 self.state.move_start_time = current_time
                 # Any real move cancels breathing mode flag
-                self._breathing_active = isinstance(self.state.current_move, BreathingMove)
-                logger.debug(f"Starting new move, duration: {self.state.current_move.duration}s")
+                self._breathing_active = isinstance(
+                    self.state.current_move, BreathingMove
+                )
+                logger.debug(
+                    f"Starting new move, duration: {self.state.current_move.duration}s"
+                )
 
     def _manage_breathing(self, current_time: float) -> None:
         """Manage automatic breathing when idle."""
@@ -557,7 +715,9 @@ class MovementManager:
                 try:
                     # These 2 functions return the latest available sensor data from the robot, but don't perform I/O synchronously.
                     # Therefore, we accept calling them inside the control loop.
-                    _, current_antennas = self.current_robot.get_current_joint_positions()
+                    _, current_antennas = (
+                        self.current_robot.get_current_joint_positions()
+                    )
                     current_head_pose = self.current_robot.get_current_head_pose()
 
                     self._breathing_active = True
@@ -569,7 +729,9 @@ class MovementManager:
                         interpolation_duration=1.0,
                     )
                     self.move_queue.append(breathing_move)
-                    logger.debug("Started breathing after %.1fs of inactivity", idle_for)
+                    logger.debug(
+                        "Started breathing after %.1fs of inactivity", idle_for
+                    )
                 except Exception as e:
                     self._breathing_active = False
                     logger.error("Failed to start breathing: %s", e)
@@ -580,13 +742,18 @@ class MovementManager:
             self._breathing_active = False
             logger.debug("Stopping breathing due to new move activity")
 
-        if self.state.current_move is not None and not isinstance(self.state.current_move, BreathingMove):
+        if self.state.current_move is not None and not isinstance(
+            self.state.current_move, BreathingMove
+        ):
             self._breathing_active = False
 
     def _get_primary_pose(self, current_time: float) -> FullBodyPose:
         """Get the primary full body pose from current move or neutral."""
         # When a primary move is playing, sample it and cache the resulting pose
-        if self.state.current_move is not None and self.state.move_start_time is not None:
+        if (
+            self.state.current_move is not None
+            and self.state.move_start_time is not None
+        ):
             move_time = current_time - self.state.move_start_time
             head, antennas, body_yaw = self.state.current_move.evaluate(move_time)
 
@@ -617,18 +784,44 @@ class MovementManager:
         return primary_full_body_pose
 
     def _get_secondary_pose(self) -> FullBodyPose:
-        """Get the secondary full body pose from speech, face tracking, and soul offsets."""
-        # Combine speech sway + face tracking + soul emotion offsets
-        # Soul offsets are applied at reduced weight to avoid overwhelming other behaviors
-        soul_weight = 0.6  # Soul emotion poses blend at 60%
+        """Get the secondary full body pose using mode-weighted offset blending.
+
+        The current movement mode determines how much each offset source contributes:
+        - soul_head_w:     Weight for soul emotion head offsets (pitch, yaw, roll, xyz)
+        - soul_antenna_w:  Weight for soul emotion antenna offsets
+        - face_tracking_w: Weight for camera face-following head offsets
+        - speech_w:        Weight for audio-driven speech wobble offsets
+
+        Offsets are combined as:
+            combined = speech * speech_w + face_tracking * face_tracking_w + soul * soul_head_w
+
+        Output is clamped to safe ranges to prevent stacking from causing
+        extreme poses.
+        """
+        soul_head_w, soul_antenna_w, face_tracking_w, speech_w = self._current_weights
+
+        # Weighted combination of head offsets from each source
+        # Indices: 0=x, 1=y, 2=z, 3=roll, 4=pitch, 5=yaw
         secondary_offsets = [
-            self.state.speech_offsets[0] + self.state.face_tracking_offsets[0] + self.state.soul_offsets[0] * soul_weight,
-            self.state.speech_offsets[1] + self.state.face_tracking_offsets[1] + self.state.soul_offsets[1] * soul_weight,
-            self.state.speech_offsets[2] + self.state.face_tracking_offsets[2] + self.state.soul_offsets[2] * soul_weight,
-            self.state.speech_offsets[3] + self.state.face_tracking_offsets[3] + self.state.soul_offsets[3] * soul_weight,
-            self.state.speech_offsets[4] + self.state.face_tracking_offsets[4] + self.state.soul_offsets[4] * soul_weight,
-            self.state.speech_offsets[5] + self.state.face_tracking_offsets[5] + self.state.soul_offsets[5] * soul_weight,
+            (
+                self.state.speech_offsets[i] * speech_w
+                + self.state.face_tracking_offsets[i] * face_tracking_w
+                + self.state.soul_offsets[i] * soul_head_w
+            )
+            for i in range(6)
         ]
+
+        # Clamp to safe ranges (radians for rotation, meters for translation)
+        # roll=3, pitch=4, yaw=5
+        secondary_offsets[3] = max(
+            -_MAX_SECONDARY_ROLL, min(_MAX_SECONDARY_ROLL, secondary_offsets[3])
+        )
+        secondary_offsets[4] = max(
+            -_MAX_SECONDARY_PITCH, min(_MAX_SECONDARY_PITCH, secondary_offsets[4])
+        )
+        secondary_offsets[5] = max(
+            -_MAX_SECONDARY_YAW, min(_MAX_SECONDARY_YAW, secondary_offsets[5])
+        )
 
         secondary_head_pose = create_head_pose(
             x=secondary_offsets[0],
@@ -641,29 +834,20 @@ class MovementManager:
             mm=False,
         )
 
-        # Combine antenna offsets from face tracking and soul
-        face_tracking_active = (
-            abs(self.state.face_tracking_offsets[4]) > 0.001 or  # pitch
-            abs(self.state.face_tracking_offsets[5]) > 0.001     # yaw
+        # Antenna offsets — only soul emotion drives antennas as secondary offset.
+        # Face tracking antenna wiggle was removed to prevent stacking conflicts.
+        # The soul system's per-emotion antenna positions (including per-emotion wiggle
+        # from MovementBlender) are the sole secondary antenna source.
+        antenna_left = self.state.soul_antenna_offsets[0] * soul_antenna_w
+        antenna_right = self.state.soul_antenna_offsets[1] * soul_antenna_w
+
+        # Clamp antenna offsets to physical limits
+        antenna_left = max(-_MAX_ANTENNA_OFFSET, min(_MAX_ANTENNA_OFFSET, antenna_left))
+        antenna_right = max(
+            -_MAX_ANTENNA_OFFSET, min(_MAX_ANTENNA_OFFSET, antenna_right)
         )
 
-        antenna_offsets = (
-            self.state.soul_antenna_offsets[0] * soul_weight,
-            self.state.soul_antenna_offsets[1] * soul_weight,
-        )
-
-        if face_tracking_active:
-            # Gentle antenna wiggle when face tracking - both antennas move opposite directions
-            wiggle_amplitude = np.deg2rad(12)  # 12 degrees
-            wiggle_frequency = 0.6  # Hz - gentle sway
-            t = self._now()
-            wiggle = wiggle_amplitude * np.sin(2 * np.pi * wiggle_frequency * t)
-            antenna_offsets = (
-                antenna_offsets[0] + wiggle,
-                antenna_offsets[1] - wiggle,  # Opposite directions
-            )
-
-        return (secondary_head_pose, antenna_offsets, 0.0)
+        return (secondary_head_pose, (antenna_left, antenna_right), 0.0)
 
     def _compose_full_body_pose(self, current_time: float) -> FullBodyPose:
         """Compose primary and secondary poses into a single command pose."""
@@ -676,7 +860,9 @@ class MovementManager:
         self._manage_move_queue(current_time)
         self._manage_breathing(current_time)
 
-    def _calculate_blended_antennas(self, target_antennas: Tuple[float, float]) -> Tuple[float, float]:
+    def _calculate_blended_antennas(
+        self, target_antennas: Tuple[float, float]
+    ) -> Tuple[float, float]:
         """Blend target antennas with listening freeze state and update blending."""
         now = self._now()
         listening = self._is_listening
@@ -696,8 +882,10 @@ class MovementManager:
             else:
                 new_blend = min(1.0, blend + dt / blend_duration)
             antennas_cmd = (
-                listening_antennas[0] * (1.0 - new_blend) + target_antennas[0] * new_blend,
-                listening_antennas[1] * (1.0 - new_blend) + target_antennas[1] * new_blend,
+                listening_antennas[0] * (1.0 - new_blend)
+                + target_antennas[0] * new_blend,
+                listening_antennas[1] * (1.0 - new_blend)
+                + target_antennas[1] * new_blend,
             )
 
         if listening:
@@ -712,10 +900,14 @@ class MovementManager:
 
         return antennas_cmd
 
-    def _issue_control_command(self, head: NDArray[np.float32], antennas: Tuple[float, float], body_yaw: float) -> None:
+    def _issue_control_command(
+        self, head: NDArray[np.float32], antennas: Tuple[float, float], body_yaw: float
+    ) -> None:
         """Send the fused pose to the robot with throttled error logging."""
         try:
-            self.current_robot.set_target(head=head, antennas=antennas, body_yaw=body_yaw)
+            self.current_robot.set_target(
+                head=head, antennas=antennas, body_yaw=body_yaw
+            )
         except Exception as e:
             now = self._now()
             if now - self._last_set_target_err >= self._set_target_err_interval:
@@ -729,10 +921,15 @@ class MovementManager:
                 self._set_target_err_suppressed += 1
         else:
             with self._status_lock:
-                self._last_commanded_pose = clone_full_body_pose((head, antennas, body_yaw))
+                self._last_commanded_pose = clone_full_body_pose(
+                    (head, antennas, body_yaw)
+                )
 
     def _update_frequency_stats(
-        self, loop_start: float, prev_loop_start: float, stats: LoopFrequencyStats,
+        self,
+        loop_start: float,
+        prev_loop_start: float,
+        stats: LoopFrequencyStats,
     ) -> LoopFrequencyStats:
         """Update frequency statistics based on the current loop start time."""
         period = loop_start - prev_loop_start
@@ -745,10 +942,14 @@ class MovementManager:
             stats.min_freq = min(stats.min_freq, stats.last_freq)
         return stats
 
-    def _schedule_next_tick(self, loop_start: float, stats: LoopFrequencyStats) -> Tuple[float, LoopFrequencyStats]:
+    def _schedule_next_tick(
+        self, loop_start: float, stats: LoopFrequencyStats
+    ) -> Tuple[float, LoopFrequencyStats]:
         """Compute sleep time to maintain target frequency and update potential freq."""
         computation_time = self._now() - loop_start
-        stats.potential_freq = 1.0 / computation_time if computation_time > 0 else float("inf")
+        stats.potential_freq = (
+            1.0 / computation_time if computation_time > 0 else float("inf")
+        )
         sleep_time = max(0.0, self.target_period - computation_time)
         return sleep_time, stats
 
@@ -764,7 +965,9 @@ class MovementManager:
                 potential_freq=stats.potential_freq,
             )
 
-    def _maybe_log_frequency(self, loop_count: int, print_interval_loops: int, stats: LoopFrequencyStats) -> None:
+    def _maybe_log_frequency(
+        self, loop_count: int, print_interval_loops: int, stats: LoopFrequencyStats
+    ) -> None:
         """Emit frequency telemetry when enough loops have elapsed."""
         if loop_count % print_interval_loops != 0 or stats.count == 0:
             return
@@ -831,6 +1034,14 @@ class MovementManager:
             "queue_size": len(self.move_queue),
             "is_listening": self._is_listening,
             "breathing_active": self._breathing_active,
+            "movement_mode": self._current_mode.value,
+            "mode_weights": {
+                "soul_head": self._current_weights[0],
+                "soul_antenna": self._current_weights[1],
+                "face_tracking": self._current_weights[2],
+                "speech": self._current_weights[3],
+            },
+            "mode_blend_progress": self._mode_blend_progress,
             "last_commanded_pose": {
                 "head": head_matrix,
                 "antennas": antennas,
@@ -862,7 +1073,9 @@ class MovementManager:
             loop_count += 1
 
             if loop_count > 1:
-                freq_stats = self._update_frequency_stats(loop_start, prev_loop_start, freq_stats)
+                freq_stats = self._update_frequency_stats(
+                    loop_start, prev_loop_start, freq_stats
+                )
             prev_loop_start = loop_start
 
             # 1) Poll external commands and apply pending offsets (atomic snapshot)

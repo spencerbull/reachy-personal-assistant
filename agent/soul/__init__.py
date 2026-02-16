@@ -17,19 +17,19 @@ Key Components:
 
 Usage:
     from agent.soul import SoulLoop, SoulConfig, Personality
-    
+
     config = SoulConfig()
     personality = Personality.load("REACHY_SOUL.md")
     soul = SoulLoop(config, reachy_service, personality=personality)
-    
+
     # Start the soul (runs in background)
     await soul.start()
-    
+
     # Feed conversation events
     soul.on_user_speaking()
     soul.on_user_message("Hello!")
     soul.on_bot_response("Hi there!")
-    
+
     # Stop when done
     await soul.stop()
 """
@@ -43,6 +43,8 @@ from agent.soul.events import (
     UserMessageEvent,
     BotResponseEvent,
     BotStreamingEvent,
+    BotSpeakingStartedEvent,
+    BotSpeakingStoppedEvent,
     FaceDetectedEvent,
     FaceLostEvent,
 )
@@ -90,6 +92,8 @@ __all__ = [
     "UserMessageEvent",
     "BotResponseEvent",
     "BotStreamingEvent",
+    "BotSpeakingStartedEvent",
+    "BotSpeakingStoppedEvent",
     "FaceDetectedEvent",
     "FaceLostEvent",
     # Logging

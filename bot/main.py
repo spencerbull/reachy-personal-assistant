@@ -18,7 +18,9 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+)
 from pipecat.processors.frameworks.rtvi import RTVIProcessor, RTVIObserver
 from pipecat.processors.transcript_processor import TranscriptProcessor
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
@@ -31,34 +33,35 @@ class URLExtractorProcessor(FrameProcessor):
     Extracts URLs from LLMTextFrame, sends full text to transport for chat display,
     then strips URL and passes cleaned text to TTS.
     """
-    
+
     def __init__(self, transport_output):
         super().__init__()
         self._transport = transport_output
-    
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        
+
         if isinstance(frame, LLMTextFrame) and frame.text:
             # Check for URL in the text
-            url_match = re.search(r'https?://[^\s]+', frame.text)
-            
+            url_match = re.search(r"https?://[^\s]+", frame.text)
+
             if url_match:
                 # Send full text (with URL) directly to transport for chat display
                 # TextFrame bypasses TTS but reaches the transport output
                 logger.info(f"URLExtractor: Sending full text with URL to chat")
                 await self._transport.process_frame(
-                    TextFrame(text=frame.text),
-                    FrameDirection.DOWNSTREAM
+                    TextFrame(text=frame.text), FrameDirection.DOWNSTREAM
                 )
-                
+
                 # Strip URL from text before sending to TTS
-                filtered = re.sub(r'https?://[^\s]+', '', frame.text)
-                filtered = re.sub(r'\s+', ' ', filtered).strip()
+                filtered = re.sub(r"https?://[^\s]+", "", frame.text)
+                filtered = re.sub(r"\s+", " ", filtered).strip()
                 logger.info(f"URLExtractor: Stripped URL for TTS: {filtered[:50]}...")
                 frame = LLMTextFrame(text=filtered)
-        
+
         await self.push_frame(frame, direction)
+
+
 from pipecat.runner.utils import (
     create_transport,
     get_transport_client_id,
@@ -93,48 +96,48 @@ load_dotenv(override=True)
 class ReachyCommandProcessor(FrameProcessor):
     """
     Processes command tokens in LLM output and executes Reachy robot actions.
-    
+
     Command tokens like [CMD_LOOK_LEFT], [CMD_FACE_TRACK_ON], etc. are parsed
     from the text and executed on the robot, then removed from the output
     before it goes to TTS.
     """
-    
+
     # Command pattern to match [CMD_*] tokens
-    CMD_PATTERN = re.compile(r'\[CMD_([A-Z_]+)\]')
-    
+    CMD_PATTERN = re.compile(r"\[CMD_([A-Z_]+)\]")
+
     def __init__(self):
         super().__init__()
         self.reachy_service = ReachyService.get_instance()
-    
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        
+
         if isinstance(frame, TextFrame) and direction == FrameDirection.DOWNSTREAM:
             text = frame.text
-            
+
             # Find and execute commands
             commands = self.CMD_PATTERN.findall(text)
-            
+
             for cmd in commands:
                 await self._execute_command(cmd)
-            
+
             # Remove command tokens from text before TTS
-            clean_text = self.CMD_PATTERN.sub('', text).strip()
-            
+            clean_text = self.CMD_PATTERN.sub("", text).strip()
+
             # Handle multiple spaces that might result from removal
-            clean_text = re.sub(r'\s+', ' ', clean_text)
-            
+            clean_text = re.sub(r"\s+", " ", clean_text)
+
             if clean_text:
                 await self.push_frame(TextFrame(text=clean_text), direction)
             return
-        
+
         await self.push_frame(frame, direction)
-    
+
     async def _execute_command(self, command: str):
         """Execute a Reachy robot command."""
         command = command.lower()
         logger.info(f"Executing Reachy command: {command}")
-        
+
         try:
             if command == "look_left":
                 self.reachy_service.look_at("left")
@@ -186,17 +189,17 @@ class ReachyCommandProcessor(FrameProcessor):
                 logger.warning(f"Unknown command: {command}")
         except Exception as e:
             logger.error(f"Error executing command {command}: {e}")
-    
+
     def _trigger_emotion(self, emotion: str):
         """Trigger an emotion expression."""
         if not self.reachy_service.connected:
             return
-        
+
         # Import dance/emotion moves
         try:
             from services.dance_emotion_moves import EmotionQueueMove
             from reachy_mini.motion.recorded_move import RecordedMoves
-            
+
             if self.reachy_service.motion_manager:
                 # Try to load recorded emotion move
                 try:
@@ -208,15 +211,15 @@ class ReachyCommandProcessor(FrameProcessor):
                     logger.debug(f"No recorded move for {emotion}: {e}")
         except ImportError:
             logger.debug("Emotion moves not available")
-    
+
     def _trigger_dance(self, dance_name: str):
         """Trigger a dance move."""
         if not self.reachy_service.connected:
             return
-        
+
         try:
             from services.dance_emotion_moves import DanceQueueMove
-            
+
             if self.reachy_service.motion_manager:
                 dance_move = DanceQueueMove(dance_name)
                 self.reachy_service.motion_manager.queue_move(dance_move)
@@ -258,12 +261,11 @@ transport_params = {
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     logger.info(f"Starting bot")
-    
+
     # Track LLM service for cleanup
     llm = None
 
     async with aiohttp.ClientSession() as session:
-
         stt = ElevenLabsSTTService(
             api_key=os.getenv("ELEVENLABS_API_KEY"),
             aiohttp_session=session,
@@ -288,8 +290,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
         # Initialize camera frame processor (injects video frames into pipeline)
         # NOTE: This starts camera capture immediately in __init__ to avoid race conditions
-        camera_processor = CameraFrameProcessor(fps=15, target_width=1280, target_height=720)
-        
+        camera_processor = CameraFrameProcessor(
+            fps=15, target_width=1280, target_height=720
+        )
+
         # Initialize Reachy command processor for handling robot commands in LLM output
         command_processor = ReachyCommandProcessor()
 
@@ -336,14 +340,17 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
         context_aggregator = LLMContextAggregatorPair(context)
         transcript = TranscriptProcessor()
         rtvi = RTVIProcessor()
-        
+
         # Store transport processors for direct access
         transport_input = transport.input()
         transport_output = transport.output()
 
         # URL extractor sends full text (with URL) to transport, strips URL for TTS
         url_extractor = URLExtractorProcessor(transport_output)
-        
+
+        # Wobbler processor — feeds TTS audio to head wobble and fires soul events
+        wobbler_processor = ReachyWobblerProcessor()
+
         pipeline = Pipeline(
             [
                 transport_input,  # Transport user input
@@ -356,7 +363,7 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
                 command_processor,  # Process [CMD_*] tokens and execute robot commands
                 url_extractor,  # Extract URL -> send to chat, strip for TTS
                 tts,  # TTS (speaks text without URLs)
-                ReachyWobblerProcessor(),
+                wobbler_processor,
                 transport_output,  # Transport bot output
                 transcript.assistant(),  # Capture assistant transcripts
                 context_aggregator.assistant(),  # Assistant spoken responses
@@ -386,15 +393,15 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             await maybe_capture_participant_camera(transport, client)
 
             client_id = get_transport_client_id(transport, client)
-            
+
             # Set references for camera processor - use the stored transport_output
             camera_processor.set_task(task)
             camera_processor.set_output_transport(transport_output)
             await camera_processor.start()
-            
+
             # Set the user_id for automatic image fetching
             llm.set_user_id(client_id)
-            
+
             # Set transport and RTVI processor for direct chat messaging (for links, images, etc.)
             if LLM_BACKEND == "langgraph":
                 llm.set_transport(transport)
@@ -404,12 +411,40 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
             if LLM_BACKEND == "langgraph":
                 logger.info("Initializing MCP tools...")
                 await llm.initialize_mcp()
-                
+
                 # Start Soul System for continuous embodiment (emotion, movement, idle behaviors)
                 logger.info("Starting Soul System...")
                 reachy_service = ReachyService.get_instance()
                 llm.set_reachy_service(reachy_service)
                 await llm.start_soul()
+
+                # Wire soul reference into processors so they can fire events
+                soul_ref = llm._soul
+                if soul_ref:
+                    wobbler_processor.set_soul(soul_ref)
+                    if camera_processor._worker:
+                        camera_processor._worker.set_soul(soul_ref)
+                    logger.info("Soul wired into wobbler and camera processors")
+
+                    # Apply SoulConfig mode weights to MovementManager
+                    if reachy_service.motion_manager and hasattr(soul_ref, "config"):
+                        from services.moves import MovementMode
+
+                        cfg = soul_ref.config
+                        reachy_service.motion_manager.configure_mode_weights(
+                            weights_table={
+                                MovementMode.IDLE: cfg.mode_weights_idle,
+                                MovementMode.LISTENING: cfg.mode_weights_listening,
+                                MovementMode.PROCESSING: cfg.mode_weights_processing,
+                                MovementMode.SPEAKING: cfg.mode_weights_speaking,
+                                MovementMode.SCANNING: cfg.mode_weights_scanning,
+                            },
+                            blend_duration=cfg.mode_transition_blend_s,
+                        )
+                        logger.info(
+                            f"Mode weights configured from SoulConfig "
+                            f"(blend={cfg.mode_transition_blend_s}s)"
+                        )
 
             # Kick off the conversation.
             messages.append(
@@ -427,17 +462,21 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
         async def on_client_disconnected(transport, client):
             logger.info(f"Client disconnected")
             await camera_processor.stop()
-            
+
             # Stop Soul System
             if LLM_BACKEND == "langgraph":
                 logger.info("Stopping Soul System...")
                 await llm.stop_soul()
-            
+
             # Close MCP connections if using LangGraph
-            if LLM_BACKEND == "langgraph" and hasattr(llm, '_mcp_loader') and llm._mcp_loader:
+            if (
+                LLM_BACKEND == "langgraph"
+                and hasattr(llm, "_mcp_loader")
+                and llm._mcp_loader
+            ):
                 logger.info("Closing MCP connections...")
                 await llm._mcp_loader.close()
-            
+
             await task.cancel()
 
         runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
@@ -450,15 +489,15 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
         finally:
             # Ensure cleanup happens even on Ctrl+C
             logger.info("Running cleanup handlers...")
-            
+
             # Stop camera processor
             try:
                 await camera_processor.stop()
             except Exception as e:
                 logger.debug(f"Camera cleanup error: {e}")
-            
+
             # Clean up LLM service (stops soul, closes MCP)
-            if LLM_BACKEND == "langgraph" and hasattr(llm, 'cleanup'):
+            if LLM_BACKEND == "langgraph" and hasattr(llm, "cleanup"):
                 try:
                     await llm.cleanup()
                 except asyncio.CancelledError:
