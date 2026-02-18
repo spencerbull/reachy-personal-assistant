@@ -18,9 +18,11 @@ def get_localhost_only() -> bool:
     - REACHY_DAEMON_HOST set (e.g., 'host.docker.internal') -> False (allow network)
     - Default -> True (localhost only)
     """
-    daemon_host = os.getenv('REACHY_DAEMON_HOST')
-    if daemon_host and daemon_host != 'localhost':
-        logger.info(f"Docker mode detected (REACHY_DAEMON_HOST={daemon_host}), allowing network connections")
+    daemon_host = os.getenv("REACHY_DAEMON_HOST")
+    if daemon_host and daemon_host != "localhost":
+        logger.info(
+            f"Docker mode detected (REACHY_DAEMON_HOST={daemon_host}), allowing network connections"
+        )
         return False
     return True
 
@@ -33,7 +35,7 @@ class ReachyService:
         self.robot = None
         self.motion_manager = None
         self.wobbler = None
-        self.host = host or os.getenv('REACHY_DAEMON_HOST', 'localhost')
+        self.host = host or os.getenv("REACHY_DAEMON_HOST", "localhost")
         self.connected = False
         self._localhost_only = get_localhost_only()
 
@@ -49,52 +51,57 @@ class ReachyService:
         if self.connected:
             logger.debug("Reachy already connected")
             return
-            
+
         # If previously disconnected, clean up any leftover state
         if self.robot or self.motion_manager or self.wobbler:
             logger.info("Cleaning up previous Reachy connection...")
             self.disconnect()
-            
+
         try:
             import os
             import time
-            
+
             # Verify DISPLAY is set
-            display = os.getenv('DISPLAY')
+            display = os.getenv("DISPLAY")
             logger.info(f"DISPLAY environment variable: {display}")
-            
+
             # Give Xvfb extra time to stabilize
             logger.info("Waiting for display to be ready...")
             time.sleep(3)
-            
-            logger.info(f"Connecting to Reachy Mini daemon (localhost_only={self._localhost_only}, host={self.host})...")
+
+            logger.info(
+                f"Connecting to Reachy Mini daemon (localhost_only={self._localhost_only}, host={self.host})..."
+            )
 
             self.robot = ReachyMini(
                 use_sim=True,
                 spawn_daemon=False,
                 localhost_only=self._localhost_only,
                 timeout=15.0,
-                log_level='DEBUG'
+                log_level="DEBUG",
             )
             logger.info(f"Successfully connected to Reachy Mini daemon")
-            
+
             # 1. Initialize Motor Cortex (Background Thread)
             self.motion_manager = MovementManager(self.robot)
-            self.motion_manager.start() 
-            
+            self.motion_manager.start()
+
             # 2. Initialize Auditory Cortex (Links Audio -> Motion)
             self.wobbler = HeadWobbler(self.motion_manager.set_speech_offsets)
             self.wobbler.start()
-            
+
             self.connected = True
             logger.info("Reachy Service Started: Breathing & Sway active.")
         except Exception as e:
             import traceback
+
             logger.warning(f"Reachy Mini daemon not available: {e}")
             logger.warning(f"Full traceback: {traceback.format_exc()}")
             logger.warning("Pipeline will continue without Reachy robot control.")
-            logger.warning("To enable Reachy: start daemon with 'mjpython -m reachy_mini.daemon.app.main --sim --no-localhost-only'")
-            
+            logger.warning(
+                "To enable Reachy: start daemon with 'mjpython -m reachy_mini.daemon.app.main --sim --no-localhost-only'"
+            )
+
             # Clean up partial robot object to avoid destructor errors
             self.robot = None
             # Don't raise - allow pipeline to run without Reachy
@@ -104,12 +111,12 @@ class ReachyService:
         if self.wobbler:
             logger.info("Feeding audio to Reachy")
             self.wobbler.feed(audio_chunk_base64)
-    
-    def set_listening_pose(self):
-        """Sets robot back to listening/idle pose."""
+
+    def set_listening_pose(self, listening: bool = True):
+        """Enable or disable listening pose (antenna freeze / breathing suppression)."""
         if self.motion_manager:
-            self.motion_manager.set_listening(True)
-            logger.info("Reachy set to listening pose")
+            self.motion_manager.set_listening(listening)
+            logger.info("Reachy listening=%s", listening)
 
     def look_at(self, direction: str):
         """Maps semantic direction to robot pose."""
@@ -126,7 +133,7 @@ class ReachyService:
             "front": (0, 0, 0, 0, 0, 0),
         }
         deltas = DELTAS.get(direction, DELTAS["front"])
-        
+
         try:
             target_pose = create_head_pose(*deltas, degrees=True)
             current_head_pose = self.robot.get_current_head_pose()
@@ -137,9 +144,9 @@ class ReachyService:
                 start_head_pose=current_head_pose,
                 target_antennas=(0, 0),
                 start_antennas=(current_antennas[0], current_antennas[1]),
-                target_body_yaw=0, 
+                target_body_yaw=0,
                 start_body_yaw=0,
-                duration=1.0
+                duration=1.0,
             )
             self.motion_manager.queue_move(goto_move)
             self.motion_manager.set_moving_state(1.0)
@@ -170,14 +177,14 @@ class ReachyService:
         try:
             # Extract pose values and convert to offset format
             # Note: head angles come in degrees, need to convert to radians
-            head_pitch_rad = np.deg2rad(pose_dict.get('head_pitch', 0.0))
-            head_yaw_rad = np.deg2rad(pose_dict.get('head_yaw', 0.0))
-            head_roll_rad = np.deg2rad(pose_dict.get('head_roll', 0.0))
-            head_z_offset = pose_dict.get('head_z_offset', 0.0)  # already in meters
+            head_pitch_rad = np.deg2rad(pose_dict.get("head_pitch", 0.0))
+            head_yaw_rad = np.deg2rad(pose_dict.get("head_yaw", 0.0))
+            head_roll_rad = np.deg2rad(pose_dict.get("head_roll", 0.0))
+            head_z_offset = pose_dict.get("head_z_offset", 0.0)  # already in meters
 
             # Antennas are already in radians
-            left_antenna = pose_dict.get('left_antenna', 0.0)
-            right_antenna = pose_dict.get('right_antenna', 0.0)
+            left_antenna = pose_dict.get("left_antenna", 0.0)
+            right_antenna = pose_dict.get("right_antenna", 0.0)
 
             # Apply as secondary offsets
             # Format: (x, y, z, roll, pitch, yaw) in meters and radians
@@ -220,6 +227,7 @@ class ReachyService:
         # This is a hook for the soul system to control it
         try:
             from services.camera_service import CameraFrameProcessor
+
             cam_processor = CameraFrameProcessor.get_instance()
             if cam_processor:
                 cam_processor.enable_face_tracking(enabled)
@@ -254,7 +262,7 @@ class ReachyService:
                 pitch=np.rad2deg(pitch_rad),
                 yaw=np.rad2deg(yaw_rad),
                 degrees=True,
-                mm=False
+                mm=False,
             )
 
             current_head_pose = self.robot.get_current_head_pose()
@@ -267,11 +275,13 @@ class ReachyService:
                 start_antennas=(current_antennas[0], current_antennas[1]),
                 target_body_yaw=0,
                 start_body_yaw=0,
-                duration=duration
+                duration=duration,
             )
             self.motion_manager.queue_move(goto_move)
             self.motion_manager.set_moving_state(duration)
-            logger.debug(f"Look around: yaw={np.rad2deg(yaw_rad):.1f}°, pitch={np.rad2deg(pitch_rad):.1f}°")
+            logger.debug(
+                f"Look around: yaw={np.rad2deg(yaw_rad):.1f}°, pitch={np.rad2deg(pitch_rad):.1f}°"
+            )
 
         except Exception as e:
             logger.debug(f"Look around failed: {e}")
@@ -280,32 +290,32 @@ class ReachyService:
         """Disconnect and cleanup Reachy resources."""
         if not self.connected:
             return
-            
+
         logger.info("Disconnecting Reachy service...")
-        
+
         # Stop background threads
         if self.motion_manager:
             self.motion_manager.stop()
         if self.wobbler:
             self.wobbler.stop()
-        
+
         # Disconnect robot
         if self.robot:
             try:
                 # The robot client should disconnect gracefully
-                if hasattr(self.robot, 'client') and self.robot.client:
+                if hasattr(self.robot, "client") and self.robot.client:
                     self.robot.client.disconnect()
             except Exception as e:
                 logger.warning(f"Error disconnecting robot: {e}")
-        
+
         # Reset state
         self.robot = None
         self.motion_manager = None
         self.wobbler = None
         self.connected = False
-        
+
         logger.info("Reachy service disconnected")
-    
+
     def stop(self):
         """Alias for disconnect for backwards compatibility."""
         self.disconnect()

@@ -59,8 +59,9 @@ class ReachyWobblerProcessor(FrameProcessor):
             self.seen_audio_hashes.clear()  # Clear hashes when new speech starts
             # Reset wobbler timing for new speech session - fixes fast/jumpy playback
             self.service.reset_wobbler()
-            # Set movement mode to SPEAKING — speech wobble dominant
+            # Unfreeze antennas for speech wobble, set mode to SPEAKING
             if self.service.motion_manager:
+                self.service.motion_manager.set_listening(False)
                 self.service.motion_manager.set_mode(MovementMode.SPEAKING)
             # Notify soul that TTS audio is actually playing
             if self._soul:
@@ -68,10 +69,10 @@ class ReachyWobblerProcessor(FrameProcessor):
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self.bot_is_speaking = False
-            self.service.set_listening_pose()
             self.seen_audio_hashes.clear()
-            # Return to IDLE — breathing resumes, soul emotions at full weight
+            # Unfreeze antennas, return to IDLE — breathing resumes
             if self.service.motion_manager:
+                self.service.motion_manager.set_listening(False)
                 self.service.motion_manager.set_mode(MovementMode.IDLE)
             # Notify soul that TTS audio finished
             if self._soul:
@@ -79,10 +80,10 @@ class ReachyWobblerProcessor(FrameProcessor):
 
         elif isinstance(frame, UserStartedSpeakingFrame):
             self.bot_is_speaking = False
-            self.service.set_listening_pose()
             self.seen_audio_hashes.clear()
-            # Set movement mode to LISTENING — face tracking dominant
+            # Freeze antennas for listening, set mode to LISTENING
             if self.service.motion_manager:
+                self.service.motion_manager.set_listening(True)
                 self.service.motion_manager.set_mode(MovementMode.LISTENING)
 
         # Only feed audio if bot is actively speaking
