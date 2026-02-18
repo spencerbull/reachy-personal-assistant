@@ -132,6 +132,13 @@ class LangGraphLLMService(LLMService):
         self._transport = None  # Transport for sending chat messages directly
         self._rtvi_processor = None  # RTVI processor for sending server messages
 
+        # Interruption / cancellation tracking (Phase 3)
+        # Monotonically increasing generation ID. Each LLM invocation snapshots
+        # the current value; if an interruption bumps it before the response is
+        # pushed to TTS, the response is considered stale and discarded.
+        self._generation_id: int = 0
+        self._inflight_task: Optional[asyncio.Task] = None
+
         # Soul System integration for continuous embodiment
         self._enable_soul = enable_soul and SOUL_AVAILABLE
         self._soul: Optional["SoulLoop"] = None
@@ -400,6 +407,12 @@ class LangGraphLLMService(LLMService):
         # Reset turn state on interruption
         if isinstance(frame, StartInterruptionFrame):
             self._current_turn_has_image = False
+            # Bump generation ID so any in-flight LLM result is marked stale
+            self._generation_id += 1
+            # Cancel in-flight LangGraph task if running
+            if self._inflight_task and not self._inflight_task.done():
+                self._inflight_task.cancel()
+                logger.info("Interruption: cancelled in-flight LangGraph task")
             await super().process_frame(frame, direction)
             await self.push_frame(frame, direction)
             return
@@ -467,32 +480,19 @@ class LangGraphLLMService(LLMService):
                     else:
                         logger.info(f"  Message {i} ({role}): multimodal content")
 
-            # Check for user message or system prompt to respond
             has_user_message = any(
                 (isinstance(msg, dict) and msg.get("role") == "user")
                 or (hasattr(msg, "role") and msg.role == "user")
                 for msg in messages
             )
 
-            # Check for "Say hello" type system messages (the second system message)
-            has_greeting_prompt = False
-            for msg in messages:
-                if isinstance(msg, dict) and msg.get("role") == "system":
-                    content = msg.get("content", "").lower()
-                    if "hello" in content or "greet" in content:
-                        has_greeting_prompt = True
-                        break
-
-            if not has_user_message and not has_greeting_prompt:
-                logger.info("No user message or greeting prompt, skipping LLM call")
-                # Pass through to allow context to build up downstream
+            if not has_user_message:
+                logger.info("No user message, skipping LLM call")
                 await super().process_frame(frame, direction)
                 await self.push_frame(frame, direction)
                 return
 
-            logger.info(
-                f"Processing LLM request: has_user={has_user_message}, has_greeting={has_greeting_prompt}"
-            )
+            logger.info(f"Processing LLM request: has_user={has_user_message}")
 
             # Process through LangGraph (don't pass frame downstream - we generate our own response)
             await self._process_with_langgraph(frame, context)
@@ -506,24 +506,13 @@ class LangGraphLLMService(LLMService):
 
     async def _process_with_langgraph(self, frame: LLMContextFrame, context):
         """Process the context through the LangGraph agent."""
+        # Snapshot generation ID so we can detect staleness after ainvoke
+        my_generation = self._generation_id
+
         try:
             # Convert context to LangChain messages
             messages = self._convert_context_to_langchain(context)
             user_message = self._extract_user_message(messages)
-
-            # If no user message, check if this is a greeting prompt
-            if not user_message:
-                # Check for "Say hello" type prompts
-                for msg in reversed(messages):
-                    if (
-                        isinstance(msg, SystemMessage)
-                        and "hello" in msg.content.lower()
-                    ):
-                        user_message = "Please greet me and introduce yourself."
-                        logger.info(
-                            "Detected greeting prompt, generating initial greeting"
-                        )
-                        break
 
             if not user_message:
                 logger.warning("No message to process, skipping")
@@ -562,11 +551,51 @@ class LangGraphLLMService(LLMService):
                 if mm:
                     mm.set_mode(MovementMode.PROCESSING)
 
-            # Invoke the graph
+            # ── Filler speech (Phase 6) ──────────────────────────────────
+            # Push a quick filler phrase to TTS so the user hears something
+            # while the main LLM is processing. Only for non-trivial requests.
+            # Disabled by default — enable via FILLER_SPEECH_ENABLED=true env var.
+            # Note: This sends a separate LLM response frame pair, so TTS will
+            # speak the filler, then the main response follows shortly after.
+            if (
+                os.getenv("FILLER_SPEECH_ENABLED", "false").lower() == "true"
+                and len(user_message) > 10
+            ):
+                import random
+
+                fillers = [
+                    "Let me check on that.",
+                    "One moment.",
+                    "On it.",
+                    "Let me think about that.",
+                    "Hmm, give me a sec.",
+                ]
+                filler = random.choice(fillers)
+                await self.push_frame(LLMFullResponseStartFrame())
+                await self.push_frame(LLMTextFrame(text=filler))
+                await self.push_frame(LLMFullResponseEndFrame())
+                logger.debug(f"Filler speech: '{filler}'")
+
+            # Invoke the graph as a tracked task so interruption can cancel it
             config = {"configurable": {"thread_id": self._thread_id}}
 
             logger.info("Invoking LangGraph agent...")
-            result = await self._graph.ainvoke(input_state, config)
+            invoke_coro = self._graph.ainvoke(input_state, config)
+            self._inflight_task = asyncio.ensure_future(invoke_coro)
+            try:
+                result = await self._inflight_task
+            finally:
+                self._inflight_task = None
+
+            # ── Staleness check ──────────────────────────────────────────
+            # If the user interrupted while the LLM was running, the
+            # generation ID will have been bumped. Discard the stale result.
+            if self._generation_id != my_generation:
+                logger.info(
+                    f"Discarding stale LLM result (generation {my_generation} "
+                    f"vs current {self._generation_id})"
+                )
+                return
 
             # Extract the response
             response_text = ""
@@ -623,14 +652,21 @@ class LangGraphLLMService(LLMService):
             await self.push_frame(LLMFullResponseEndFrame())
             logger.info("Response frames pushed")
 
+        except asyncio.CancelledError:
+            logger.info("LangGraph invocation cancelled by interruption")
+            # Don't push any frames — the user interrupted, pipeline handles cleanup
+            return
+
         except Exception as e:
             logger.error(f"LangGraph processing error: {e}", exc_info=True)
+            import random
 
-            # Send error response
+            error_responses = [
+                "Hmm, something went sideways on my end. Want to try that again?",
+                "I got a bit tangled up processing that. Could you rephrase?",
+                "My circuits got crossed on that one. What were you saying?",
+                "I stumbled on that request. Mind giving it another go?",
+            ]
             await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(
-                LLMTextFrame(
-                    text="I'm sorry, I had trouble processing that. Could you try again?"
-                )
-            )
+            await self.push_frame(LLMTextFrame(text=random.choice(error_responses)))
             await self.push_frame(LLMFullResponseEndFrame())

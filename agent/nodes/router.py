@@ -38,20 +38,27 @@ Analyze the user's message and determine the best route:
    - Emotions: "Show me you're happy", "Be excited"
    - Dance: "Dance for me", "Do a dance", "Show me your moves", "Celebrate!"
 
-4. "calendar" - Any request about calendar, schedule, meetings, events, or appointments
+4. "image_gen" - Requests to transform, render, stylize, or generate images
+   Examples: "Render my drawing", "Transform this into 3D", "Make it cyberpunk", "Create an image", "Style transfer", "Turn this into a painting", "Can you render this?"
+
+5. "calendar" - Any request about calendar, schedule, meetings, events, or appointments
    Examples: "What's on my calendar?", "Check my schedule", "Am I free tomorrow?", "Create an event", "What meetings do I have?"
 
-5. "email" - Any request about email, inbox, sending/reading messages
+6. "email" - Any request about email, inbox, sending/reading messages
    Examples: "Check my email", "Do I have new emails?", "Send an email to John", "Read my latest email"
 
-IMPORTANT: 
-- Calendar/schedule questions go to "calendar"
-- Email/inbox questions go to "email"
-- Physical robot actions go to "tools"
-- Visual questions go to "vision"
+IMPORTANT ROUTING RULES:
+- When in doubt, route to "conversation" — it's better to chat than to trigger the wrong action
+- Only route to "vision" if the user is EXPLICITLY asking about what the robot can see
+- Only route to "tools" if the user is giving a DIRECT command to the robot's body
+- Only route to "image_gen" if the user is asking to render, transform, stylize, or generate an image
+- Only route to "calendar" or "email" if the user EXPLICITLY mentions calendar/email/schedule/inbox
+- Words like "hand", "face", "room" in normal conversation should go to "conversation", not "vision"
+- "remember" in casual context ("remember when we...") goes to "conversation", not "tools"
+- "create" without image context ("create a calendar event") does NOT go to "image_gen"
 
 Respond with ONLY a JSON object in this exact format:
-{"route": "conversation" | "vision" | "tools" | "calendar" | "email", "reason": "brief explanation"}"""
+{"route": "conversation" | "vision" | "tools" | "image_gen" | "calendar" | "email", "reason": "brief explanation"}"""
 
 
 def create_router_llm(config: AgentConfig) -> ChatOpenAI:
@@ -78,6 +85,24 @@ def extract_user_message(state: ReachyAgentState) -> str:
     return ""
 
 
+def _is_clearly_image_related(lower_msg: str) -> bool:
+    """Check if message is unambiguously about image generation."""
+    image_phrases = [
+        "render",
+        "3d",
+        "painting",
+        "cyberpunk",
+        "style",
+        "transform",
+        "here it is",
+        "here you go",
+        "show",
+        "ready",
+        "this image",
+    ]
+    return any(phrase in lower_msg for phrase in image_phrases)
+
+
 def parse_router_response(response: str) -> tuple[RouteType, str]:
     """Parse the router's JSON response."""
     try:
@@ -90,17 +115,24 @@ def parse_router_response(response: str) -> tuple[RouteType, str]:
             data = json.loads(json_str)
             route = data.get("route", "conversation")
             reason = data.get("reason", "")
-            
+
             # Validate route
-            valid_routes = ("conversation", "vision", "tools", "image_gen", "calendar", "email")
+            valid_routes = (
+                "conversation",
+                "vision",
+                "tools",
+                "image_gen",
+                "calendar",
+                "email",
+            )
             if route not in valid_routes:
                 logger.warning(f"Invalid route '{route}', defaulting to conversation")
                 route = "conversation"
-            
+
             return route, reason
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse router response: {e}")
-    
+
     # Default fallback
     return "conversation", "Failed to parse, defaulting to conversation"
 
@@ -108,137 +140,144 @@ def parse_router_response(response: str) -> tuple[RouteType, str]:
 async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpdate:
     """
     Router node that classifies the user's intent.
-    
+
     Args:
         state: Current agent state
         config: Agent configuration
-        
+
     Returns:
         State update with the route decision
     """
     user_message = extract_user_message(state)
-    
+
     if not user_message:
         logger.warning("No user message found in state")
         return {"route": "conversation"}
-    
-    # Check if we're in the middle of an image generation conversation
+
+    # Universal flow-exit: let user escape any stateful sub-flow
+    EXIT_PHRASES = [
+        "cancel",
+        "stop",
+        "never mind",
+        "nevermind",
+        "forget it",
+        "let's move on",
+        "change topic",
+        "something else",
+        "that's enough",
+        "no thanks",
+        "not that",
+        "skip",
+        "abort",
+    ]
+    lower_msg = user_message.lower().strip()
+    if any(phrase in lower_msg for phrase in EXIT_PHRASES):
+        logger.info("Router: Flow exit detected, clearing stateful context")
+        return {
+            "route": "conversation",
+            "image_gen_context": None,
+            "captured_source_image": None,
+            "original_image_description": None,
+        }
+
+    # If in image_gen flow, check if user is continuing that flow or changing topic
+    # Bias toward staying in the flow — the image_gen node has its own exit check
+    # via _seems_image_related() which is more granular per-phase
     image_gen_context = state.get("image_gen_context")
     captured_source_image = state.get("captured_source_image")
-    
     if image_gen_context or captured_source_image:
-        phase = image_gen_context.get("phase") if image_gen_context else "collecting_details"
-        logger.info(f"Router: Fast path -> image_gen (continuing conversation, phase={phase})")
+        phase = image_gen_context.get("phase", "") if image_gen_context else ""
+
+        # Stay in image_gen for: image-related terms, confirmations, style words,
+        # short affirmatives, or anything the image_gen node can handle
+        if _is_clearly_image_related(lower_msg):
+            logger.info("Router: Continuing image_gen flow (image-related terms)")
+            return {"route": "image_gen"}
+
+        # Short confirmations / affirmatives should stay in the flow
+        # (the image_gen node will handle them per-phase)
+        _CONTINUATION_PHRASES = [
+            "yes",
+            "yeah",
+            "yep",
+            "yup",
+            "sure",
+            "ok",
+            "okay",
+            "ready",
+            "go ahead",
+            "do it",
+            "here",
+            "got it",
+        ]
+        if lower_msg in _CONTINUATION_PHRASES or any(
+            lower_msg.startswith(p) for p in _CONTINUATION_PHRASES
+        ):
+            logger.info("Router: Continuing image_gen flow (confirmation/affirmative)")
+            return {"route": "image_gen"}
+
+        # If the message looks like it's about something completely different
+        # (explicit topic-change signals already caught by exit phrases above),
+        # let the image_gen node decide — it has its own _seems_image_related check
+        # and will clear context if appropriate
+        logger.info(
+            "Router: In image_gen context, routing to image_gen node for topic-change check"
+        )
         return {"route": "image_gen"}
-    
-    # Check for obvious patterns first (fast path)
-    lower_msg = user_message.lower()
-    
-    # Image generation keywords - transform, render, style transfer requests
-    image_gen_keywords = [
-        "render", "rendering", "generate image", "create image", "make image",
-        "transform image", "transform this", "transform the", "transform it",
-        "3d render", "style transfer", "stylize", "reimagine", "recreate",
-        "turn this into", "convert this to", "make this look like",
-        "create a rendering", "help me render", "can you render",
-    ]
-    if any(kw in lower_msg for kw in image_gen_keywords):
-        logger.info(f"Router: Fast path -> image_gen (keyword match)")
-        return {"route": "image_gen"}
-    
-    # Vision keywords - anything that requires seeing/analyzing visual input
-    vision_keywords = [
-        # Direct vision requests
-        "what do you see", "what can you see", "what am i", "look at this",
-        "describe what", "describe the", "describe my", "describe this",
-        "what's in front", "what is in front",
-        # Appearance questions
-        "what color", "what colour", "how many", "count the", "count my",
-        # Object/person identification
-        "what is this", "what is that", "what are these", "what are those",
-        "who is", "who am i", "who's there",
-        # Actions the user is performing
-        "holding", "wearing", "doing", "showing you",
-        # Environment description
-        "surroundings", "environment", "scene", "room", "around you",
-        # Hand/body related vision
-        "fingers", "hand", "hands", "face", "shirt", "clothes",
-        # General visual queries
-        "can you see", "do you see", "see my", "see this", "see the",
-        "read this", "read the", "read my",
-    ]
-    if any(kw in lower_msg for kw in vision_keywords):
-        logger.info(f"Router: Fast path -> vision (keyword match)")
-        return {"route": "vision"}
-    
-    # Calendar keywords - calendar, schedule, meetings, events
-    calendar_keywords = [
-        "calendar", "schedule", "appointment", "meeting",
-        "what's on my calendar", "check my calendar", "my events",
-        "upcoming events", "events today", "events tomorrow", "events this week",
-        "create event", "add event", "schedule event", "book a meeting",
-        "free time", "am i free", "am i available", "availability",
-        "when am i free", "find a time", "busy", "freebusy",
-    ]
-    if any(kw in lower_msg for kw in calendar_keywords):
-        logger.info(f"Router: Fast path -> calendar (keyword match)")
-        return {"route": "calendar"}
-    
-    # Email keywords - email, inbox, messages
-    email_keywords = [
-        "email", "gmail", "inbox", "send email", "send an email",
-        "read email", "read my email", "check email", "check my email",
-        "unread email", "new email", "latest email", "recent email",
-        "mail", "mailbox", "message from", "email from",
-        "reply to", "forward email", "compose email", "draft email",
-        "search email", "find email",
-    ]
-    if any(kw in lower_msg for kw in email_keywords):
-        logger.info(f"Router: Fast path -> email (keyword match)")
-        return {"route": "email"}
-    
-    # Tool keywords - physical actions and memory operations (no calendar/email)
-    tool_keywords = [
-        # Head movement
-        "look left", "look right", "look up", "look down", "look at me",
-        "look over", "look toward", "look towards",
-        # Body movement
-        "turn left", "turn right", "turn around", "spin",
-        # Memory operations
-        "remember", "don't forget", "memorize",
-        "where did i", "where is my", "where are my", "where's my",
-        "find my", "locate my",
-        # Face tracking
-        "face track", "follow me", "track my face", "watch me",
-        "maintain eye contact", "eye contact",
-        # Emotions and expressions
-        "show me you're", "express", "be happy", "be sad", "be excited",
-        # Dance and movement requests
-        "dance", "dancing", "celebrate", "wave", "nod", "shake your head",
-        "show me a move", "do a move", "do a dance", "groove", "boogie",
-        "headbang", "sway", "spin around", "bust a move", "show off",
-        # General reminders (physical object location)
-        "reminder",
-    ]
-    if any(kw in lower_msg for kw in tool_keywords):
-        logger.info(f"Router: Fast path -> tools (keyword match)")
-        return {"route": "tools"}
-    
-    # Use LLM for ambiguous cases
+
+    # Fast path: only for unambiguous physical commands that can't be misinterpreted
+    UNAMBIGUOUS_COMMANDS = {
+        "tools": [
+            "look left",
+            "look right",
+            "look up",
+            "look down",
+            "look at me",
+            "turn left",
+            "turn right",
+            "turn around",
+            "dance for me",
+            "do a dance",
+            "wave at me",
+            "nod your head",
+        ],
+    }
+    for route, commands in UNAMBIGUOUS_COMMANDS.items():
+        if lower_msg in commands or any(lower_msg.startswith(cmd) for cmd in commands):
+            logger.info(f"Router: Unambiguous command -> {route}")
+            return {"route": route}
+
+    # LLM router is now the PRIMARY path
     try:
         llm = create_router_llm(config)
-        
+
+        # Include recent context for better classification
+        recent_context = ""
+        msgs = state.get("messages", [])
+        if len(msgs) > 1:
+            for msg in msgs[-3:]:  # Last 3 messages for context
+                if hasattr(msg, "type"):
+                    role = "User" if msg.type == "human" else "Reachy"
+                    content = (
+                        msg.content[:100] if len(msg.content) > 100 else msg.content
+                    )
+                    recent_context += f"\n{role}: {content}"
+
+        context_note = (
+            f"\nRecent conversation:{recent_context}" if recent_context else ""
+        )
+
         messages = [
             SystemMessage(content=ROUTER_SYSTEM_PROMPT),
-            HumanMessage(content=f"User message: {user_message}")
+            HumanMessage(content=f"User message: {user_message}{context_note}"),
         ]
-        
+
         response = await llm.ainvoke(messages)
         route, reason = parse_router_response(response.content)
-        
+
         logger.info(f"Router: LLM decided '{route}' - {reason}")
         return {"route": route}
-        
+
     except Exception as e:
         logger.error(f"Router LLM error: {e}")
         # Fallback to conversation on error
@@ -268,7 +307,7 @@ def should_route_to_image_gen(state: ReachyAgentState) -> bool:
 def get_next_node(state: ReachyAgentState) -> str:
     """Determine the next node based on the route."""
     route = state.get("route", "conversation")
-    
+
     if route == "vision":
         return "vision"
     elif route == "tools":

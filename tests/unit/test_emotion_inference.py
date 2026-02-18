@@ -18,6 +18,10 @@ def _make_config(**overrides) -> SoulConfig:
         log_events=False,
         log_decisions=False,
         emotion_inference_interval_ms=100,
+        # Disable damping by default in tests so pre-existing tests
+        # don't need to account for multi-cycle commit requirements
+        emotion_damping_cycles=1,
+        emotion_min_hold_time_s=0.0,
     )
     defaults.update(overrides)
     return SoulConfig(**defaults)
@@ -247,3 +251,135 @@ class TestResponseParsing:
         prompt = ei._build_inference_prompt()
         assert "Tell me a joke" in prompt
         assert "speaking" in prompt
+
+
+class TestEmotionDamping:
+    """Test emotion damping to prevent flickering."""
+
+    def test_same_emotion_passes_through(self):
+        """When result matches committed emotion, return as-is."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=2, emotion_min_hold_time_s=1.0)
+        )
+        ei._last_committed_emotion = "happy"
+        result = EmotionInferenceResult(
+            emotion="happy", intensity=0.8, inference_time_ms=50.0
+        )
+        damped = ei.apply_damping(result, min_hold_s=1.0, damping_cycles=2)
+        assert damped.emotion == "happy"
+        assert damped.intensity == 0.8
+
+    def test_new_emotion_not_committed_immediately(self):
+        """A new emotion shouldn't commit on first cycle with damping_cycles=2."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=2, emotion_min_hold_time_s=0.0)
+        )
+        ei._last_committed_emotion = "neutral"
+        result = EmotionInferenceResult(
+            emotion="happy", intensity=0.7, inference_time_ms=50.0
+        )
+        damped = ei.apply_damping(result, min_hold_s=0.0, damping_cycles=2)
+        # Should still return neutral (not committed yet)
+        assert damped.emotion == "neutral"
+        assert ei._pending_emotion == "happy"
+        assert ei._pending_emotion_count == 1
+
+    def test_new_emotion_commits_after_enough_cycles(self):
+        """After damping_cycles consecutive occurrences, emotion commits."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=2, emotion_min_hold_time_s=0.0)
+        )
+        ei._last_committed_emotion = "neutral"
+
+        result = EmotionInferenceResult(
+            emotion="happy", intensity=0.7, inference_time_ms=50.0
+        )
+
+        # First cycle: sets pending
+        damped = ei.apply_damping(result, min_hold_s=0.0, damping_cycles=2)
+        assert damped.emotion == "neutral"
+
+        # Second cycle: pending count reaches 2, commits
+        damped = ei.apply_damping(result, min_hold_s=0.0, damping_cycles=2)
+        assert damped.emotion == "happy"
+        assert ei._last_committed_emotion == "happy"
+
+    def test_different_emotion_resets_pending(self):
+        """If a different emotion appears mid-damping, pending resets."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=3, emotion_min_hold_time_s=0.0)
+        )
+        ei._last_committed_emotion = "neutral"
+
+        happy_result = EmotionInferenceResult(
+            emotion="happy", intensity=0.7, inference_time_ms=50.0
+        )
+        curious_result = EmotionInferenceResult(
+            emotion="curious", intensity=0.5, inference_time_ms=50.0
+        )
+
+        # First: happy pending
+        ei.apply_damping(happy_result, min_hold_s=0.0, damping_cycles=3)
+        assert ei._pending_emotion == "happy"
+        assert ei._pending_emotion_count == 1
+
+        # Second: curious replaces pending
+        ei.apply_damping(curious_result, min_hold_s=0.0, damping_cycles=3)
+        assert ei._pending_emotion == "curious"
+        assert ei._pending_emotion_count == 1
+
+    def test_high_confidence_skips_damping(self):
+        """Very high confidence+intensity emotions bypass damping."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=5, emotion_min_hold_time_s=10.0)
+        )
+        ei._last_committed_emotion = "neutral"
+
+        result = EmotionInferenceResult(
+            emotion="excited", intensity=0.9, confidence=0.95, inference_time_ms=50.0
+        )
+        damped = ei.apply_damping(result, min_hold_s=10.0, damping_cycles=5)
+        # Should bypass damping entirely
+        assert damped.emotion == "excited"
+        assert ei._last_committed_emotion == "excited"
+
+    def test_min_hold_time_prevents_rapid_changes(self):
+        """Even with enough cycles, min_hold_time_s must pass."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=1, emotion_min_hold_time_s=5.0)
+        )
+        ei._last_committed_emotion = "neutral"
+        ei._last_emotion_change_time = time.time()  # Just changed
+
+        result = EmotionInferenceResult(
+            emotion="happy", intensity=0.7, inference_time_ms=50.0
+        )
+        damped = ei.apply_damping(result, min_hold_s=5.0, damping_cycles=1)
+        # count=1 >= cycles=1, but hold time not met
+        assert damped.emotion == "neutral"
+
+    def test_damping_preserves_inference_time(self):
+        """Damped results should preserve the original inference_time_ms."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=3, emotion_min_hold_time_s=0.0)
+        )
+        ei._last_committed_emotion = "neutral"
+
+        result = EmotionInferenceResult(
+            emotion="happy", intensity=0.7, inference_time_ms=123.4
+        )
+        damped = ei.apply_damping(result, min_hold_s=0.0, damping_cycles=3)
+        assert damped.inference_time_ms == 123.4
+
+    def test_single_cycle_damping_commits_immediately(self):
+        """With damping_cycles=1 and min_hold_s=0, a new emotion commits on first call."""
+        ei = EmotionInference(
+            _make_config(emotion_damping_cycles=1, emotion_min_hold_time_s=0.0)
+        )
+        ei._last_committed_emotion = "neutral"
+
+        result = EmotionInferenceResult(
+            emotion="happy", intensity=0.7, inference_time_ms=50.0
+        )
+        damped = ei.apply_damping(result, min_hold_s=0.0, damping_cycles=1)
+        assert damped.emotion == "happy"

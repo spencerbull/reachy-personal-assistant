@@ -55,6 +55,40 @@ _OPTIONAL_STUBS = [
 for _mod in _OPTIONAL_STUBS:
     _ensure_module(_mod)
 
+# Add mock classes to stub modules so `from X import Y` works.
+# This avoids import failures when agent.nodes.* tries to import from
+# langchain_openai, langchain_core.messages, etc.
+_lc_openai = sys.modules.get("langchain_openai")
+if _lc_openai is not None and not hasattr(_lc_openai, "ChatOpenAI"):
+    _lc_openai.ChatOpenAI = MagicMock()  # type: ignore[attr-defined]
+
+_lc_core_msgs = sys.modules.get("langchain_core.messages")
+if _lc_core_msgs is not None:
+    for _cls in (
+        "HumanMessage",
+        "AIMessage",
+        "SystemMessage",
+        "BaseMessage",
+        "ToolMessage",
+        "FunctionMessage",
+        "ChatMessage",
+    ):
+        if not hasattr(_lc_core_msgs, _cls):
+            setattr(_lc_core_msgs, _cls, MagicMock())
+
+# Stub other langchain modules that agent.nodes may import
+for _sub in [
+    "langchain_core.tools",
+    "langchain_core.runnables",
+    "langchain_core.output_parsers",
+]:
+    _ensure_module(_sub)
+    _m = sys.modules.get(_sub)
+    if _m is not None:
+        for _attr in ("tool", "BaseTool", "StructuredTool", "Runnable"):
+            if not hasattr(_m, _attr):
+                setattr(_m, _attr, MagicMock())
+
 # Provide a no-op stub for agent.graph so agent/__init__.py doesn't crash.
 # This must happen *before* anything imports `agent`.
 if "agent.graph" not in sys.modules:
@@ -67,6 +101,7 @@ if "agent.state" not in sys.modules:
     _state_stub = types.ModuleType("agent.state")
     _state_stub.ReachyAgentState = MagicMock()  # type: ignore[attr-defined]
     _state_stub.ReachyState = MagicMock()  # type: ignore[attr-defined]
+    _state_stub.StateUpdate = MagicMock()  # type: ignore[attr-defined]
     sys.modules["agent.state"] = _state_stub
 
 

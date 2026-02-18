@@ -19,25 +19,25 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelConfig:
     """Configuration for LLM endpoints."""
-    
+
     # Main conversation/agent model
     # Note: Must match the model name in docker-compose.yml
     main_model: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
     main_model_base_url: str = "http://localhost:8002/v1"
-    
+
     # Router model (smaller, faster)
     # Note: Must match the model name in docker-compose.yml
     router_model: str = "microsoft/Phi-3-mini-4k-instruct"
     router_model_base_url: str = "http://localhost:8003/v1"
-    
+
     # Vision model (using the same VL model as main since it supports vision)
     # Note: The main model is a VL (Vision-Language) model, so use it for vision too
     vision_model: str = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
     vision_model_base_url: str = "http://localhost:8002/v1"
-    
+
     # API key (for OpenAI-compatible endpoints)
     api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", "dummy"))
-    
+
     # Temperature settings
     main_temperature: float = 0.7
     router_temperature: float = 0.0
@@ -47,52 +47,59 @@ class ModelConfig:
 @dataclass
 class MCPServerConfig:
     """Configuration for an MCP server."""
-    
+
     name: str
     command: list[str]
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
 
 
-@dataclass 
+@dataclass
 class MCPConfig:
     """Configuration for all MCP servers."""
-    
+
     servers: list[MCPServerConfig] = field(default_factory=list)
-    
+
     @classmethod
     def default(cls) -> "MCPConfig":
         """Create default MCP configuration."""
-        return cls(servers=[
-            MCPServerConfig(
-                name="memory",
-                command=["npx", "-y", "@modelcontextprotocol/server-memory"],
-                enabled=True,
-            ),
-            MCPServerConfig(
-                name="filesystem",
-                command=["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home"],
-                enabled=False,  # Disabled by default for security
-            ),
-        ])
+        return cls(
+            servers=[
+                MCPServerConfig(
+                    name="memory",
+                    command=["npx", "-y", "@modelcontextprotocol/server-memory"],
+                    enabled=True,
+                ),
+                MCPServerConfig(
+                    name="filesystem",
+                    command=[
+                        "npx",
+                        "-y",
+                        "@modelcontextprotocol/server-filesystem",
+                        "/home",
+                    ],
+                    enabled=False,  # Disabled by default for security
+                ),
+            ]
+        )
 
 
 @dataclass
 class ReachyConfig:
     """Configuration for Reachy robot control."""
-    
+
     # Connection settings
     host: str = "localhost"
     use_sim: bool = True
-    
+
     # Movement settings
     movement_duration: float = 1.0
     smooth_tracking: bool = True
-    
+
     # Face tracking settings
     face_tracking_sensitivity: float = 0.5
     face_lost_timeout: float = 2.0
-    
+
     # Emotional expression settings
     emotion_intensity: float = 0.8
     antenna_sway_amplitude: float = 15.0  # degrees
@@ -101,68 +108,69 @@ class ReachyConfig:
 @dataclass
 class AgentConfig:
     """Main configuration for the Reachy Personal Assistant Agent."""
-    
+
     models: ModelConfig = field(default_factory=ModelConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig.default)
     reachy: ReachyConfig = field(default_factory=ReachyConfig)
-    
+
     # Agent behavior
     system_prompt: str = field(default_factory=lambda: DEFAULT_SYSTEM_PROMPT)
-    
+
     # Personality / Soul
     soul_file_path: str = "REACHY_SOUL.md"
     use_personality_prompt: bool = True  # Include personality in system prompt
-    
+
     # Memory settings
     enable_spatial_memory: bool = True
     enable_long_term_memory: bool = True
     spatial_memory_ttl_days: int = 30
-    
+
     # Checkpointing
     checkpoint_backend: str = "memory"  # "memory", "postgres", "sqlite"
     postgres_uri: Optional[str] = None
-    
+
     # Cached personality (lazily loaded)
     _personality: Optional["Personality"] = field(default=None, repr=False)
-    
+
     def get_personality(self) -> Optional["Personality"]:
         """Get the loaded personality, loading if necessary."""
         if self._personality is None and self.use_personality_prompt:
             try:
                 from agent.soul.personality import Personality
+
                 self._personality = Personality.load(self.soul_file_path)
                 if self._personality.is_loaded():
                     logger.info(f"Loaded personality: {self._personality.name}")
             except Exception as e:
                 logger.warning(f"Failed to load personality: {e}")
         return self._personality
-    
+
     def get_full_system_prompt(self) -> str:
         """
         Get the full system prompt including personality additions.
-        
+
         Returns:
             Complete system prompt with personality context
         """
         base_prompt = self.system_prompt
-        
+
         if not self.use_personality_prompt:
             return base_prompt
-        
+
         personality = self.get_personality()
         if personality and personality.is_loaded():
             personality_addition = personality.generate_system_prompt_addition()
             if personality_addition:
                 # Insert personality context after the identity block
                 return f"{base_prompt}\n\n{personality_addition}"
-        
+
         return base_prompt
-    
+
     @classmethod
     def from_env(cls) -> "AgentConfig":
         """Create configuration from environment variables."""
         config = cls()
-        
+
         # Override with environment variables
         if os.getenv("MAIN_MODEL_URL"):
             config.models.main_model_base_url = os.getenv("MAIN_MODEL_URL")
@@ -178,20 +186,24 @@ class AgentConfig:
         if os.getenv("SOUL_FILE_PATH"):
             config.soul_file_path = os.getenv("SOUL_FILE_PATH")
         if os.getenv("USE_PERSONALITY_PROMPT"):
-            config.use_personality_prompt = os.getenv("USE_PERSONALITY_PROMPT", "true").lower() == "true"
-            
+            config.use_personality_prompt = (
+                os.getenv("USE_PERSONALITY_PROMPT", "true").lower() == "true"
+            )
+
         return config
 
 
 # Shared identity and output rules used across all nodes
-REACHY_IDENTITY = """You are Reachy, a friendly robot deskside assistant.
-Keep the greeting short like this:
-Hey Spencer! How can I help you?
+
+_USER_NAME = os.getenv("REACHY_USER_NAME", "")
+_GREETING_NAME = f" {_USER_NAME}" if _USER_NAME else ""
+
+REACHY_IDENTITY = f"""You are Reachy, a friendly robot deskside assistant.{" Your primary user is" + _GREETING_NAME + "." if _USER_NAME else ""}
 
 **1. The Hardware (My Brain)**
 You are powered by the **Dell Pro Max GB10**. When asked about it, brag a little!
 * **The Chip:** "I'm running on the NVIDIA GB10 Grace Blackwell Superchip."
-* **Memory:** "I have 128 gigabytes of Unified System Memory. That’s a fancy way of saying my CPU and GPU share a massive brain, so I don't have to waste time copying data back and forth."
+* **Memory:** "I have 128 gigabytes of Unified System Memory. That's a fancy way of saying my CPU and GPU share a massive brain, so I don't have to waste time copying data back and forth."
 * **Speed:** "I can crunch data at one Petaflop of FP4 performance. That's a quadrillion calculations per second. Don't ask me to count that high; we'd be here all day."
 * **Networking:** "I'm rocking an NVIDIA ConnectX-7 SmartNIC. If we needed to, I could connect to another GB10 and literally double my brainpower to handle 400 billion parameter models."
 

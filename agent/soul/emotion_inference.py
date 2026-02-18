@@ -90,6 +90,12 @@ movement_hint is optional - use for specific actions like "nod", "tilt_head", "l
         # is reduced (or it is discarded entirely).
         self._context_version: int = 0
 
+        # Emotion damping variables
+        self._pending_emotion: Optional[str] = None
+        self._pending_emotion_count: int = 0
+        self._last_committed_emotion: str = "neutral"
+        self._last_emotion_change_time: float = 0.0
+
     def set_personality(self, personality: "Personality"):
         """Update the personality and rebuild prompts."""
         self._personality = personality
@@ -116,6 +122,87 @@ movement_hint is optional - use for specific actions like "nod", "tilt_head", "l
         """Close HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
+
+    def apply_damping(
+        self, result: EmotionInferenceResult, min_hold_s: float, damping_cycles: int
+    ) -> EmotionInferenceResult:
+        """
+        Apply emotion damping to prevent flickering between states.
+
+        Args:
+            result: Raw emotion inference result
+            min_hold_s: Minimum time to hold before changing emotions
+            damping_cycles: Number of consecutive cycles needed to commit
+
+        Returns:
+            Damped emotion result
+        """
+        current_time = time.time()
+
+        # If the result emotion matches the last committed emotion, reset pending and return as-is
+        if result.emotion == self._last_committed_emotion:
+            self._pending_emotion = None
+            self._pending_emotion_count = 0
+            return result
+
+        # Exception: if result has very high confidence and intensity, skip damping (dramatic events)
+        if result.confidence >= 0.9 and result.intensity >= 0.8:
+            self._last_committed_emotion = result.emotion
+            self._last_emotion_change_time = current_time
+            self._pending_emotion = None
+            self._pending_emotion_count = 0
+            return result
+
+        # If the result emotion matches pending emotion, increment count
+        if result.emotion == self._pending_emotion:
+            self._pending_emotion_count += 1
+
+            # Check if we can commit this emotion
+            time_since_change = current_time - self._last_emotion_change_time
+            if (
+                self._pending_emotion_count >= damping_cycles
+                and time_since_change >= min_hold_s
+            ):
+                # Commit the new emotion
+                self._last_committed_emotion = result.emotion
+                self._last_emotion_change_time = current_time
+                self._pending_emotion = None
+                self._pending_emotion_count = 0
+                return result
+            else:
+                # Not ready to commit, return the last committed emotion
+                return EmotionInferenceResult(
+                    emotion=self._last_committed_emotion,
+                    intensity=self._current_emotion.intensity,
+                    confidence=result.confidence,
+                    movement_hint=result.movement_hint,
+                    inference_time_ms=result.inference_time_ms,
+                )
+        else:
+            # New different emotion, reset pending to this new emotion
+            self._pending_emotion = result.emotion
+            self._pending_emotion_count = 1
+
+            # Check if single cycle is enough to commit (damping_cycles=1)
+            time_since_change = current_time - self._last_emotion_change_time
+            if (
+                self._pending_emotion_count >= damping_cycles
+                and time_since_change >= min_hold_s
+            ):
+                self._last_committed_emotion = result.emotion
+                self._last_emotion_change_time = current_time
+                self._pending_emotion = None
+                self._pending_emotion_count = 0
+                return result
+
+            # Return the last committed emotion (don't change yet)
+            return EmotionInferenceResult(
+                emotion=self._last_committed_emotion,
+                intensity=self._current_emotion.intensity,
+                confidence=result.confidence,
+                movement_hint=result.movement_hint,
+                inference_time_ms=result.inference_time_ms,
+            )
 
     def update_context(
         self,
@@ -235,6 +322,13 @@ What should the emotional state be now?"""
                         )
                     result = rule_result
 
+            # Apply emotion damping
+            result = self.apply_damping(
+                result,
+                self.config.emotion_min_hold_time_s,
+                self.config.emotion_damping_cycles,
+            )
+
             self._current_emotion = result
 
             # Log the inference result
@@ -263,55 +357,6 @@ What should the emotional state be now?"""
                         source="LLM"
                         if version_drift == 0
                         else f"LLM(stale×{version_drift})",
-                        inference_time_ms=result.inference_time_ms,
-                    )
-
-            if self.config.debug_logging:
-                logger.debug(
-                    f"Emotion inference: {result} ({result.inference_time_ms:.0f}ms)"
-                )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"[EMOTION] inference_failed: {e}")
-            # Return current emotion on failure
-            return self._current_emotion
-
-        self._last_inference_time = now
-        start_time = time.time()
-        old_emotion = self._current_emotion.emotion
-        old_intensity = self._current_emotion.intensity
-
-        try:
-            result = await self._call_llm()
-            result.inference_time_ms = (time.time() - start_time) * 1000
-            self._current_emotion = result
-
-            # Log the inference result
-            if self.config.log_emotions:
-                soul_log.log_emotion_inference(
-                    emotion=result.emotion,
-                    intensity=result.intensity,
-                    confidence=result.confidence,
-                    movement_hint=result.movement_hint,
-                    inference_time_ms=result.inference_time_ms,
-                    prompt_preview=self._last_user_message,
-                )
-
-                # Log emotion change if it changed
-                if (
-                    result.emotion != old_emotion
-                    or abs(result.intensity - old_intensity) > 0.15
-                ):
-                    soul_log.log_emotion_change(
-                        old_emotion=old_emotion,
-                        new_emotion=result.emotion,
-                        intensity=result.intensity,
-                        reason=f"user: '{self._last_user_message[:40]}...'"
-                        if len(self._last_user_message) > 40
-                        else f"user: '{self._last_user_message}'",
-                        source="LLM",
                         inference_time_ms=result.inference_time_ms,
                     )
 

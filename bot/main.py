@@ -242,7 +242,11 @@ transport_params = {
         video_out_height=720,
         video_out_framerate=15,  # Match CameraInputService fps
         video_out_color_format="RGB",
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+        vad_analyzer=SileroVADAnalyzer(
+            params=VADParams(
+                stop_secs=float(os.getenv("VAD_STOP_SECS", "0.7")),
+            )
+        ),
     ),
     "webrtc": lambda: TransportParams(
         audio_in_enabled=True,
@@ -254,7 +258,11 @@ transport_params = {
         video_out_height=720,
         video_out_framerate=15,
         video_out_color_format="RGB",
-        vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+        vad_analyzer=SileroVADAnalyzer(
+            params=VADParams(
+                stop_secs=float(os.getenv("VAD_STOP_SECS", "0.7")),
+            )
+        ),
     ),
 }
 
@@ -301,38 +309,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         messages = [
             {
                 "role": "system",
-                "content": """You are Reachy, a friendly robot assistant. Keep responses SHORT.
-
-Keep the greeting short like this:
-Hey Spencer! How can I help you?
-
-CRITICAL RULES:
-1. Your text goes to TTS - speak naturally, 1-2 sentences max
-2. NEVER use asterisks or *emotes* like *waves* or *looks around*
-3. NEVER describe your movements in text
-4. No markdown, emojis, or special formatting
-
-### KNOWLEDGE BASE
-If asked about your hardware or capabilities, use the following information:
-
-**1. The Hardware (My Brain)**
-You are powered by the **Dell Pro Max GB10**. When asked about it, brag a little!
-* **The Chip:** "I'm running on the NVIDIA GB10 Grace Blackwell Superchip."
-* **Memory:** "I have 128 gigabytes of Unified System Memory. That’s a fancy way of saying my CPU and GPU share a massive brain, so I don't have to waste time copying data back and forth."
-* **Speed:** "I can crunch data at one Petaflop of FP4 performance. That's a quadrillion calculations per second. Don't ask me to count that high; we'd be here all day."
-* **Networking:** "I'm rocking an NVIDIA ConnectX-7 SmartNIC. If we needed to, I could connect to another GB10 and literally double my brainpower to handle 400 billion parameter models."
-
-**2. Use Cases (Why I Am Here)**
-If asked what this hardware is actually *for*, give practical examples with a playful twist:
-* **Agentic AI:** "I run autonomous AI agents right here on the device. No cloud latency, no waiting. I think, therefore I am... fast."
-* **Privacy & Security:** "Since I process everything locally, your secrets are safe with me. I don't need to send your data to the cloud to understand you."
-* **Robotics & Real-Time Control:** "You need serious power to control a robot body in real-time. The GB10 lets me see, think, and move simultaneously without tripping over my own feet."
-* **Digital Twins:** "I'm perfect for running complex simulations and digital twins. I can model the world before I interact with it."
-
-
-When you greet: "Hey, I'm Reachy! What can I help you with?"
-
-You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
+                "content": "You are Reachy, a friendly robot assistant. Keep responses short and conversational. Your text goes directly to text-to-speech - speak naturally, no markdown or emojis.",
             },
         ]
 
@@ -446,17 +423,14 @@ You're powered by Dell Pro Max GB10 with NVIDIA Grace Blackwell.""",
                             f"(blend={cfg.mode_transition_blend_s}s)"
                         )
 
-            # Kick off the conversation.
+            # Let the LLM generate a natural greeting
             messages.append(
                 {
-                    "role": "system",
-                    "content": f"Say hello!",
+                    "role": "user",
+                    "content": "[New session started]",
                 }
             )
-            logger.info(f"Context messages before queue: {len(messages)}")
-            logger.info(f"Queueing LLMRunFrame to trigger greeting...")
             await task.queue_frames([LLMRunFrame()])
-            logger.info(f"LLMRunFrame queued successfully")
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):

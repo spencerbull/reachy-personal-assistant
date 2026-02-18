@@ -111,6 +111,12 @@ class SoulConfig:
     emotion_decay_to: str = "neutral"
     emotion_decay_after_s: float = 30.0
 
+    # Emotion damping - prevents flickering between states
+    # New emotions must persist for this duration before being applied
+    emotion_min_hold_time_s: float = 1.5
+    # Number of consecutive inference cycles an emotion must appear before committing
+    emotion_damping_cycles: int = 2
+
     # Face tracking
     # NOTE: Face tracking is now controlled by movement mode weights, not toggled on/off.
     # The camera always runs face detection; mode weights control how much the
@@ -211,6 +217,10 @@ class SoulConfig:
             log_status_interval_s=float(
                 os.getenv("SOUL_LOG_STATUS_INTERVAL_S", "30.0")
             ),
+            emotion_min_hold_time_s=float(
+                os.getenv("SOUL_EMOTION_MIN_HOLD_TIME_S", "1.5")
+            ),
+            emotion_damping_cycles=int(os.getenv("SOUL_EMOTION_DAMPING_CYCLES", "2")),
         )
 
     def get_mode_weights(self, mode_name: str) -> Tuple[float, float, float, float]:
