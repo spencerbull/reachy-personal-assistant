@@ -30,34 +30,37 @@ from pipecat.runner.types import RunnerArguments
 
 class URLExtractorProcessor(FrameProcessor):
     """
-    Extracts URLs from LLMTextFrame, sends full text to transport for chat display,
-    then strips URL and passes cleaned text to TTS.
+    Safety net: strips any URLs that might still be in LLMTextFrame text
+    headed for TTS. The main URL handling (skip_tts frames) is done
+    upstream in LangGraphLLMService, but this catches edge cases.
     """
 
-    def __init__(self, transport_output):
+    def __init__(self, transport_output=None):
         super().__init__()
-        self._transport = transport_output
+        self._transport = transport_output  # kept for backwards compat, unused
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, LLMTextFrame) and frame.text:
-            # Check for URL in the text
+            # If skip_tts is set, pass through unchanged (text-only message)
+            if frame.skip_tts:
+                await self.push_frame(frame, direction)
+                return
+
+            # Safety: strip any URLs that slipped through to TTS path
             url_match = re.search(r"https?://[^\s]+", frame.text)
-
             if url_match:
-                # Send full text (with URL) directly to transport for chat display
-                # TextFrame bypasses TTS but reaches the transport output
-                logger.info(f"URLExtractor: Sending full text with URL to chat")
-                await self._transport.process_frame(
-                    TextFrame(text=frame.text), FrameDirection.DOWNSTREAM
-                )
-
-                # Strip URL from text before sending to TTS
                 filtered = re.sub(r"https?://[^\s]+", "", frame.text)
                 filtered = re.sub(r"\s+", " ", filtered).strip()
-                logger.info(f"URLExtractor: Stripped URL for TTS: {filtered[:50]}...")
-                frame = LLMTextFrame(text=filtered)
+                if filtered:
+                    logger.info(
+                        f"URLExtractor: Stripped leftover URL for TTS: {filtered[:50]}..."
+                    )
+                    frame = LLMTextFrame(text=filtered)
+                else:
+                    # Nothing left after stripping URL — drop the frame
+                    return
 
         await self.push_frame(frame, direction)
 

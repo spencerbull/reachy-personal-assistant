@@ -15,6 +15,7 @@ import asyncio
 import base64
 import io
 import os
+import re
 import sys
 from typing import Optional
 
@@ -621,8 +622,6 @@ class LangGraphLLMService(LLMService):
                 for tool_result in result["tool_results"]:
                     tool_output = str(tool_result.get("result", ""))
                     # Extract any command tokens from tool output
-                    import re
-
                     cmd_matches = re.findall(r"\[CMD_[A-Z_]+\]", tool_output)
                     for cmd in cmd_matches:
                         if cmd not in response_text:
@@ -639,17 +638,61 @@ class LangGraphLLMService(LLMService):
             if self._soul:
                 self._soul.on_bot_response(response_text)
 
-            # Clean up "Image URL:" prefix but keep the URL in the text
-            # The URL will be captured by transcript, then stripped by URLFilterProcessor before TTS
-            display_text = response_text
-            if "\n\nImage URL:" in response_text:
-                # Replace "Image URL: http://..." with just the URL on its own line
-                display_text = response_text.replace("\n\nImage URL:", "\n\n🖼️")
+            # Check if the response contains an image URL
+            url_match = re.search(r"https?://[^\s]+", response_text)
 
-            # Send full text (with URL) - transcript captures it, URLFilter strips URL before TTS
-            await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(LLMTextFrame(text=display_text))
-            await self.push_frame(LLMFullResponseEndFrame())
+            if "\n\nImage URL:" in response_text:
+                # Split into spoken part and URL part
+                parts = response_text.split("\n\nImage URL:", 1)
+                spoken_text = parts[0].strip()
+                url_text = parts[1].strip() if len(parts) > 1 else ""
+
+                # 1) Send spoken portion through TTS normally
+                await self.push_frame(LLMFullResponseStartFrame())
+                await self.push_frame(LLMTextFrame(text=spoken_text))
+                await self.push_frame(LLMFullResponseEndFrame())
+                logger.info(f"Spoken response pushed: {spoken_text[:80]}...")
+
+                # 2) Send URL as text-only (skip TTS) so it appears in chat UI
+                if url_text:
+                    url_start = LLMFullResponseStartFrame()
+                    url_start.skip_tts = True
+                    url_frame = LLMTextFrame(text=f"\n🖼️ {url_text}")
+                    url_frame.skip_tts = True
+                    url_end = LLMFullResponseEndFrame()
+                    url_end.skip_tts = True
+                    await self.push_frame(url_start)
+                    await self.push_frame(url_frame)
+                    await self.push_frame(url_end)
+                    logger.info(f"URL text-only frame pushed: {url_text[:80]}...")
+            elif url_match:
+                # Response has a URL but not in "Image URL:" format — split generically
+                url = url_match.group(0)
+                spoken_text = response_text.replace(url, "").strip()
+                spoken_text = re.sub(r"\s+", " ", spoken_text)
+
+                # Send spoken part
+                await self.push_frame(LLMFullResponseStartFrame())
+                await self.push_frame(LLMTextFrame(text=spoken_text))
+                await self.push_frame(LLMFullResponseEndFrame())
+
+                # Send URL as text-only
+                url_start = LLMFullResponseStartFrame()
+                url_start.skip_tts = True
+                url_frame = LLMTextFrame(text=f"\n🖼️ {url}")
+                url_frame.skip_tts = True
+                url_end = LLMFullResponseEndFrame()
+                url_end.skip_tts = True
+                await self.push_frame(url_start)
+                await self.push_frame(url_frame)
+                await self.push_frame(url_end)
+                logger.info(f"URL text-only frame pushed (generic): {url[:80]}...")
+            else:
+                # Normal text response — no URL
+                await self.push_frame(LLMFullResponseStartFrame())
+                await self.push_frame(LLMTextFrame(text=response_text))
+                await self.push_frame(LLMFullResponseEndFrame())
+
             logger.info("Response frames pushed")
 
         except asyncio.CancelledError:

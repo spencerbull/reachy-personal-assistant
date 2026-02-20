@@ -278,7 +278,7 @@ async def image_gen_node(
                         "Image gen node: Capturing source image from user confirmation"
                     )
 
-                    # Describe what we see
+                    # Describe what we see (full description stored for prompt generation, not shown to user)
                     image_description = await describe_image(current_image, config)
                     logger.info(
                         f"Image gen node: Described image: {image_description[:100]}..."
@@ -292,7 +292,7 @@ async def image_gen_node(
                     return {
                         "messages": [
                             AIMessage(
-                                content=f"I can see {image_description}. What style would you like me to transform this into? For example, realistic 3D render, oil painting, cyberpunk, or something else?"
+                                content="Got it, I can see your image! What style would you like me to transform this into? For example, realistic 3D render, oil painting, cyberpunk, or something else?"
                             )
                         ],
                         "captured_source_image": current_image,

@@ -247,6 +247,30 @@ async def router_node(state: ReachyAgentState, config: AgentConfig) -> StateUpda
             logger.info(f"Router: Unambiguous command -> {route}")
             return {"route": route}
 
+    # Fast path: image generation / style transfer requests
+    IMAGE_GEN_PHRASES = [
+        "render",
+        "style transfer",
+        "transform this",
+        "transform my",
+        "make it 3d",
+        "make this 3d",
+        "turn this into",
+        "turn my drawing",
+        "create a render",
+        "generate an image",
+        "generate image",
+        "stylize",
+        "make it cyberpunk",
+        "make it anime",
+        "make it realistic",
+        "oil painting",
+        "watercolor",
+    ]
+    if any(phrase in lower_msg for phrase in IMAGE_GEN_PHRASES):
+        logger.info("Router: Fast-path image_gen (keyword match)")
+        return {"route": "image_gen"}
+
     # LLM router is now the PRIMARY path
     try:
         llm = create_router_llm(config)
